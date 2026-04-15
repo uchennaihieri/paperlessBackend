@@ -37,11 +37,13 @@ router.post("/send-otp", async (req: Request, res: Response) => {
   await prisma.verificationToken.create({ data: { email, token: otp, expires } });
 
   // Send email
-  await mailer.sendMail({
-    from: `Paperless <${process.env.SMTP_USER}>`,
-    to: email,
-    subject: "Paperless – Your Login OTP",
-    html: `
+
+  try {
+    await mailer.sendMail({
+      from: `Paperless <${process.env.SMTP_USER}>`,
+      to: email,
+      subject: "Paperless – Your Login OTP",
+      html: `
       <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
         <h2 style="color: #B50938; margin-bottom: 4px;">Paperless by FINCA</h2>
         <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
@@ -53,7 +55,22 @@ router.post("/send-otp", async (req: Request, res: Response) => {
         <p style="font-size: 13px; color: #6b7280;">This code expires in <strong>10 minutes</strong>. Do not share it with anyone.</p>
       </div>
     `,
-  });
+    });
+    // await mailer.sendMail({
+    //   from: `Paperless <${process.env.SMTP_USER}>`,
+    //   to: email,
+    //   subject: "Paperless – Your Login OTP",
+    //   html: `...`,
+    // });
+  } catch (err: any) {
+    console.error("MAIL ERROR FULL:", err);
+    return res.status(500).json({
+      success: false,
+      error: err.message || "Mail failed",
+    });
+  }
+
+
 
   res.json({ success: true, message: "OTP sent successfully" });
 });
