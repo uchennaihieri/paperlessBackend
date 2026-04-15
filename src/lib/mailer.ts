@@ -11,7 +11,7 @@ export const mailer = {
     html: string;
   }) => {
     const { data, error } = await resend.emails.send({
-      from: 'resend',
+      from: options.from,
       to: options.to,
       subject: options.subject,
       html: options.html,
