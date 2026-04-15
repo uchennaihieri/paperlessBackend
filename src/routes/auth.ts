@@ -91,7 +91,7 @@ router.post("/verify-otp", async (req: Request, res: Response) => {
     return;
   }
 
-  const isSystemAdmin = userRoles.some((r) => r.user_role?.toLowerCase() === "administrator");
+  const isSystemAdmin = userRoles.some((r: any) => r.user_role?.toLowerCase() === "administrator");
   if (userRoles.length > 1 && !isSystemAdmin) {
     res.status(400).json({
       success: false,
@@ -101,7 +101,7 @@ router.post("/verify-otp", async (req: Request, res: Response) => {
   }
 
   const defaultRole = userRoles[0];
-  const minimalRoles = userRoles.map((r) => ({
+  const minimalRoles = userRoles.map((r: any) => ({
     id: r.id.toString(),
     user_role: r.user_role,
     branch: r.branch,
