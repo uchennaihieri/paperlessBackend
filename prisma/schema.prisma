@@ -1,0 +1,110 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              Int       @id @default(autoincrement())
+  branch          String?   @db.VarChar(100)
+  login_id        String?   @db.VarChar(50)
+  user_no         String?   @db.VarChar(50)
+  user_role       String?   @db.VarChar(50)
+  employee_id     String?   @db.VarChar(50)
+  user_name       String?   @db.VarChar(150)
+  finca_email     String?   @db.VarChar(150)
+  lock_flag       Boolean?
+  effective_date  DateTime? @db.Date
+  customer_number String?   @db.VarChar(50)
+  creation_date   DateTime? @default(now()) @db.Timestamp()
+  created_by      String?   @db.VarChar(50)
+  status          String?   @db.VarChar(20)
+
+  // System added fields
+  signature        String?
+  securityData     SecurityData?
+  submissions      FormSubmission[]
+
+  @@map("users")
+}
+
+model FormTemplate {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  fields      Json
+  htmlTemplate String? @db.Text // Store the raw HTML string template
+  formOwner   String?  // The branch that owns/creates this form
+  formTreater String?  // The branch responsible for treating/processing this form
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  submissions FormSubmission[]
+}
+
+// Main form submission record
+model FormSubmission {
+  id             String              @id @default(cuid())
+  reference      String?             @unique
+  formName       String
+  status         String              @default("Submitted") // Submitted, In-review, Processing, Awaiting Final Approval, Completed, Rejected
+  formResponses  Json                // The actual field answers
+  signingType    String              @default("sequential") // sequential | parallel
+  treatedBy      String?             // Name of the officer who assigned to self and treated
+  approvedBy     String?             // Display name of final approver, or "None"
+  approverEmail  String?             // Email used to route to approver's queue
+  submittedById  Int?
+  submittedBy    User?               @relation(fields: [submittedById], references: [id])
+  templateId     String
+  template       FormTemplate        @relation(fields: [templateId], references: [id])
+  signatories    SubmissionSignatory[]
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+}
+
+// Each signatory on a submission - ordered by position
+model SubmissionSignatory {
+  id             String         @id @default(cuid())
+  submissionId   String
+  submission     FormSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  position       Int            // 1 = first to sign, 2 = second, etc.
+  userName       String
+  email          String
+  signedAt       DateTime?
+  signatureToken String?
+  signatureData  String?        @db.Text // Contains the base64 signature blob
+  status         String         @default("Pending") // Pending, Signed, Declined
+
+  @@unique([submissionId, position])
+}
+
+model VerificationToken {
+  id      String   @id @default(cuid())
+  email   String
+  token   String
+  expires DateTime
+
+  @@unique([email, token])
+}
+
+model SecurityData {
+  id                 String   @id @default(cuid())
+  userId             Int      @unique
+  hashedToken        String
+  encryptedSignature String   @db.Text
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model UploadedFile {
+  id           String   @id @default(cuid())
+  fileName     String
+  originalName String
+  filePath     String
+  size         Int
+  mimeType     String
+  createdAt    DateTime @default(now())
+}
