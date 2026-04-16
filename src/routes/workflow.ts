@@ -1,10 +1,134 @@
-import { Router, Response } from "express";
+import { Router, Response, NextFunction } from "express";
 import prisma from "../lib/prisma";
 import { authenticate, AuthRequest } from "../middleware/authenticate";
 import { hashToken, decrypt } from "../lib/crypto";
 import { mailer } from "../lib/mailer";
 
 const router = Router();
+
+// ── SSE helper: inject query token before authenticate middleware ──────────────
+// Native EventSource cannot set custom headers, so the frontend passes the JWT
+// as ?token=<jwt>. This inline middleware promotes it to the Authorization header
+// before the authenticate middleware validates it.
+const injectQueryToken = (req: AuthRequest, _res: Response, next: NextFunction) => {
+  if (!req.headers.authorization && req.query.token) {
+    req.headers.authorization = `Bearer ${req.query.token}`;
+  }
+  next();
+};
+
+// ── GET /api/v1/workflow/queue/stream (SSE) ───────────────────────────────────
+// Real-time push of the authenticated user's signing queue.
+// Sends immediately on connect, then every 10 seconds.
+router.get(
+  "/queue/stream",
+  injectQueryToken,
+  authenticate as any,
+  async (req: AuthRequest, res: Response) => {
+    const email = req.user?.email ?? null;
+    if (!email) {
+      res.status(401).json({ success: false, error: "Not authenticated." });
+      return;
+    }
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no"); // critical for Railway/Nginx proxies
+    res.flushHeaders();
+
+    const sendQueue = async () => {
+      try {
+        const [normalItems, finalApprovalItems] = await Promise.all([
+          prisma.formSubmission.findMany({
+            where: {
+              signatories: {
+                some: { email: { equals: email, mode: "insensitive" }, status: "Pending" },
+              },
+              status: { not: "Awaiting Final Approval" },
+            },
+            include: {
+              signatories: { orderBy: { position: "asc" } },
+              submittedBy: { select: { user_name: true, finca_email: true, branch: true } },
+            },
+            orderBy: { createdAt: "desc" },
+          }),
+          prisma.formSubmission.findMany({
+            where: {
+              status: "Awaiting Final Approval",
+              approverEmail: { equals: email, mode: "insensitive" },
+            },
+            include: {
+              signatories: { orderBy: { position: "asc" } },
+              submittedBy: { select: { user_name: true, finca_email: true, branch: true } },
+            },
+            orderBy: { createdAt: "desc" },
+          }),
+        ]);
+
+        const eligible = normalItems.filter((sub: any) => {
+          const myRow = sub.signatories.find(
+            (s: any) => s.email.toLowerCase() === email.toLowerCase()
+          );
+          if (!myRow || myRow.status !== "Pending") return false;
+          if (sub.signingType === "parallel") return true;
+          return !sub.signatories.some(
+            (s: any) => s.position < myRow.position && s.status === "Pending"
+          );
+        });
+
+        const data = [...eligible, ...finalApprovalItems];
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+      } catch {
+        res.write(`data: []\n\n`);
+      }
+    };
+
+    await sendQueue();
+    const interval = setInterval(sendQueue, 10_000);
+    req.on("close", () => clearInterval(interval));
+  }
+);
+
+// ── GET /api/v1/workflow/submissions/stream (SSE) ─────────────────────────────
+// Real-time push of the authenticated user's own form submissions.
+// Sends immediately on connect, then every 10 seconds.
+router.get(
+  "/submissions/stream",
+  injectQueryToken,
+  authenticate as any,
+  async (req: AuthRequest, res: Response) => {
+    const userId = req.user?.id ?? null;
+    if (!userId) {
+      res.status(401).json({ success: false, error: "Not authenticated." });
+      return;
+    }
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+
+    const sendSubmissions = async () => {
+      try {
+        const submissions = await prisma.formSubmission.findMany({
+          where: { submittedById: userId },
+          orderBy: { createdAt: "desc" },
+          include: { signatories: { orderBy: { position: "asc" } } },
+        });
+        res.write(`data: ${JSON.stringify(submissions)}\n\n`);
+      } catch {
+        res.write(`data: []\n\n`);
+      }
+    };
+
+    await sendSubmissions();
+    const interval = setInterval(sendSubmissions, 10_000);
+    req.on("close", () => clearInterval(interval));
+  }
+);
+
 router.use(authenticate as any);
 
 // ── GET /api/v1/workflow/queue ────────────────────────────────────────────────
