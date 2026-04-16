@@ -9,8 +9,8 @@ router.use(authenticate as any);
 // ── POST /api/v1/security/register ───────────────────────────────────────────
 // Register/update a new 8-char security token + encrypted signature blob
 router.post("/register", async (req: AuthRequest, res: Response) => {
-  const userId = req.user?.id;
-  if (!userId) { res.status(401).json({ success: false, error: "Not logged in" }); return; }
+  const userEmail = req.user?.email;
+  if (!userEmail) { res.status(401).json({ success: false, error: "Not logged in" }); return; }
 
   const { token, signatureBlob } = req.body;
   if (!token || token.length !== 8) {
@@ -25,13 +25,10 @@ router.post("/register", async (req: AuthRequest, res: Response) => {
   const hashedToken = hashToken(token);
   const encryptedSignature = encrypt(signatureBlob);
 
-  // Also store raw signature on User for backward compatibility
-  await prisma.user.update({ where: { id: userId }, data: { signature: signatureBlob } });
-
   await prisma.securityData.upsert({
-    where: { userId },
+    where: { userEmail },
     update: { hashedToken, encryptedSignature },
-    create: { userId, hashedToken, encryptedSignature },
+    create: { userEmail, hashedToken, encryptedSignature },
   });
 
   res.json({ success: true });
@@ -40,12 +37,12 @@ router.post("/register", async (req: AuthRequest, res: Response) => {
 // ── POST /api/v1/security/verify-token ───────────────────────────────────────
 // Verify a given token and return the decrypted signature if valid
 router.post("/verify-token", async (req: AuthRequest, res: Response) => {
-  const userId = req.user?.id;
-  if (!userId) { res.status(401).json({ success: false, error: "Not logged in" }); return; }
+  const userEmail = req.user?.email;
+  if (!userEmail) { res.status(401).json({ success: false, error: "Not logged in" }); return; }
 
   const { token } = req.body;
   const hashedInput = hashToken(token);
-  const data = await prisma.securityData.findUnique({ where: { userId } });
+  const data = await prisma.securityData.findUnique({ where: { userEmail } });
 
   if (!data) {
     res.status(404).json({ success: false, error: "No security signature token found for your account." });
@@ -62,10 +59,10 @@ router.post("/verify-token", async (req: AuthRequest, res: Response) => {
 
 // ── GET /api/v1/security/my-signature ────────────────────────────────────────
 router.get("/my-signature", async (req: AuthRequest, res: Response) => {
-  const userId = req.user?.id;
-  if (!userId) { res.status(401).json({ success: false, error: "Not logged in" }); return; }
+  const userEmail = req.user?.email;
+  if (!userEmail) { res.status(401).json({ success: false, error: "Not logged in" }); return; }
 
-  const data = await prisma.securityData.findUnique({ where: { userId } });
+  const data = await prisma.securityData.findUnique({ where: { userEmail } });
   if (!data) { res.status(404).json({ success: false, error: "No signature configured yet." }); return; }
 
   const rawSignature = decrypt(data.encryptedSignature);

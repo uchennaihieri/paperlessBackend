@@ -21,6 +21,8 @@ import uploadRouter from "./routes/upload";
 import filesRouter from "./routes/files";
 import pdfRouter from "./routes/pdf";
 import mobileRouter from "./routes/mobile";
+import reportsRouter from "./routes/reports";
+import branchesRouter from "./routes/branches";
 
 const app = express();
 const PORT = process.env.PORT ?? 4000;
@@ -70,6 +72,9 @@ v1.use("/upload", uploadRouter);
 v1.use("/file", filesRouter);
 v1.use("/pdf", pdfRouter);
 v1.use("/mobile", mobileRouter);
+v1.use("/reports", reportsRouter);
+v1.use("/branches", branchesRouter);
+
 
 app.use("/api/v1", v1);
 

@@ -88,11 +88,11 @@ router.post("/", async (req: AuthRequest, res: Response) => {
 
   // Optionally sign as the initiator using their registered token
   if (initiatorToken) {
-    const userId = req.user?.id;
-    if (!userId) { res.status(401).json({ success: false, error: "Not logged in" }); return; }
+    const userEmail = req.user?.email;
+    if (!userEmail) { res.status(401).json({ success: false, error: "Not logged in" }); return; }
 
     const hashedInput = hashToken(initiatorToken);
-    const secData = await prisma.securityData.findUnique({ where: { userId } });
+    const secData = await prisma.securityData.findUnique({ where: { userEmail } });
     if (!secData || secData.hashedToken !== hashedInput) {
       res.status(400).json({ success: false, error: "Invalid signature token." });
       return;

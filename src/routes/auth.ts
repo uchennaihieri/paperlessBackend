@@ -117,7 +117,12 @@ router.post("/verify-otp", async (req: Request, res: Response) => {
     return;
   }
 
-  const defaultRole = userRoles[0];
+  // If the user is a system admin, make the admin role the default so the JWT
+  // carries user_role="administrator" and passes the requireAdmin middleware.
+  const defaultRole = isSystemAdmin
+    ? userRoles.find((r: any) => r.user_role?.toLowerCase() === "administrator")!
+    : userRoles[0];
+
   const minimalRoles = userRoles.map((r: any) => ({
     id: r.id.toString(),
     user_role: r.user_role,

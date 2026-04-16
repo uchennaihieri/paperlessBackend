@@ -25,7 +25,6 @@ model User {
 
   // System added fields
   signature        String?
-  securityData     SecurityData?
   submissions      FormSubmission[]
 
   @@map("users")
@@ -91,12 +90,11 @@ model VerificationToken {
 
 model SecurityData {
   id                 String   @id @default(cuid())
-  userId             Int      @unique
+  userEmail          String   @unique
   hashedToken        String
   encryptedSignature String   @db.Text
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
-  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model UploadedFile {
@@ -107,4 +105,29 @@ model UploadedFile {
   size         Int
   mimeType     String
   createdAt    DateTime @default(now())
+}
+
+model Report {
+  id          String         @id @default(cuid())
+  name        String
+  description String         @db.Text
+  script      String         @db.Text
+  createdBy   String         // email of the Administrator who created it
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  access      ReportAccess[]
+
+  @@map("reports")
+}
+
+// Join table: which users have access to which reports
+model ReportAccess {
+  id         String   @id @default(cuid())
+  reportId   String
+  userEmail  String
+  report     Report   @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  grantedAt  DateTime @default(now())
+
+  @@unique([reportId, userEmail])
+  @@map("report_access")
 }

@@ -160,10 +160,10 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
   let finalSignatureData: string | null = signatureData ?? null;
 
   if (signatureToken) {
-    const userId = req.user?.id;
-    if (!userId) { res.status(401).json({ success: false, error: "Not logged in" }); return; }
+    const userEmail = req.user?.email;
+    if (!userEmail) { res.status(401).json({ success: false, error: "Not logged in" }); return; }
     const hashedInput = hashToken(signatureToken);
-    const secData = await prisma.securityData.findUnique({ where: { userId } });
+    const secData = await prisma.securityData.findUnique({ where: { userEmail } });
     if (!secData || secData.hashedToken !== hashedInput) {
       res.status(400).json({ success: false, error: "Invalid signature token." });
       return;
