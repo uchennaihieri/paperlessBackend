@@ -203,4 +203,117 @@ router.post("/:id/file-attachments", async (req, res: Response) => {
   res.json({ success: true });
 });
 
+// ── PUT /api/v1/submissions/:id ───────────────────────────────────────────────
+// Owner can edit and resubmit their own form if status is Submitted or Rejected.
+// Replaces formResponses and signatories entirely, resets status to "Submitted".
+const EDITABLE_STATUSES = ["Submitted", "Rejected"];
+
+router.put("/:id", async (req: AuthRequest, res: Response) => {
+  const userId = req.user?.id;
+  if (!userId) { res.status(401).json({ success: false, error: "Unauthenticated" }); return; }
+
+  const existing = await prisma.formSubmission.findUnique({
+    where: { id: req.params.id },
+    include: { signatories: true },
+  });
+
+  if (!existing) { res.status(404).json({ success: false, error: "Submission not found" }); return; }
+
+  // Ownership check — only the original submitter may edit
+  if (existing.submittedById !== userId) {
+    res.status(403).json({ success: false, error: "You do not have permission to edit this submission" });
+    return;
+  }
+
+  // Status guard — only editable when Submitted or Rejected
+  if (!EDITABLE_STATUSES.includes(existing.status)) {
+    res.status(400).json({
+      success: false,
+      error: `This submission cannot be edited because its status is "${existing.status}". Only Submitted or Rejected forms can be edited.`,
+    });
+    return;
+  }
+
+  const { formResponses, signatories, signingType } = req.body;
+
+  if (!formResponses) {
+    res.status(400).json({ success: false, error: "formResponses is required" });
+    return;
+  }
+
+  const sigsInput: Array<{ position: number; userName: string; email: string }> =
+    signatories ?? existing.signatories.map((s) => ({
+      position: s.position,
+      userName: s.userName,
+      email: s.email,
+    }));
+
+  // Atomically: delete old signatories → update submission → create new signatories
+  await prisma.$transaction([
+    prisma.submissionSignatory.deleteMany({ where: { submissionId: req.params.id } }),
+    prisma.formSubmission.update({
+      where: { id: req.params.id },
+      data: {
+        formResponses,
+        signingType: signingType ?? existing.signingType,
+        status: "Submitted",
+        treatedBy: null,
+        approvedBy: null,
+        approverEmail: null,
+      },
+    }),
+  ]);
+
+  // Re-create signatories after the update
+  if (sigsInput.length > 0) {
+    await prisma.submissionSignatory.createMany({
+      data: sigsInput.map((s) => ({
+        submissionId: req.params.id,
+        position: s.position,
+        userName: s.userName,
+        email: s.email,
+        status: "Pending",
+      })),
+    });
+  }
+
+  const updated = await prisma.formSubmission.findUnique({
+    where: { id: req.params.id },
+    include: { signatories: { orderBy: { position: "asc" } } },
+  });
+
+  res.json({ success: true, data: updated });
+});
+
+// ── DELETE /api/v1/submissions/:id ────────────────────────────────────────────
+// Owner can delete their own form if status is Submitted or Rejected.
+router.delete("/:id", async (req: AuthRequest, res: Response) => {
+  const userId = req.user?.id;
+  if (!userId) { res.status(401).json({ success: false, error: "Unauthenticated" }); return; }
+
+  const existing = await prisma.formSubmission.findUnique({
+    where: { id: req.params.id },
+  });
+
+  if (!existing) { res.status(404).json({ success: false, error: "Submission not found" }); return; }
+
+  // Ownership check
+  if (existing.submittedById !== userId) {
+    res.status(403).json({ success: false, error: "You do not have permission to delete this submission" });
+    return;
+  }
+
+  // Status guard
+  if (!EDITABLE_STATUSES.includes(existing.status)) {
+    res.status(400).json({
+      success: false,
+      error: `This submission cannot be deleted because its status is "${existing.status}". Only Submitted or Rejected forms can be deleted.`,
+    });
+    return;
+  }
+
+  await prisma.formSubmission.delete({ where: { id: req.params.id } });
+  res.json({ success: true });
+});
+
 export default router;

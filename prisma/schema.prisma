@@ -75,6 +75,7 @@ model SubmissionSignatory {
   signatureToken String?
   signatureData  String?        @db.Text // Contains the base64 signature blob
   status         String         @default("Pending") // Pending, Signed, Declined
+  declineReason  String?        @db.Text // Optional reason given when declining
 
   @@unique([submissionId, position])
 }

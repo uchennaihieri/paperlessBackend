@@ -2,6 +2,7 @@ import { Router, Response } from "express";
 import prisma from "../lib/prisma";
 import { authenticate, AuthRequest } from "../middleware/authenticate";
 import { hashToken, decrypt } from "../lib/crypto";
+import { mailer } from "../lib/mailer";
 
 const router = Router();
 router.use(authenticate as any);
@@ -211,6 +212,8 @@ router.post("/:id/decline", async (req: AuthRequest, res: Response) => {
   const email = req.user?.email ?? null;
   if (!email) { res.status(401).json({ success: false, error: "Not authenticated." }); return; }
 
+  const { reason } = req.body; // optional decline reason
+
   const sigRow = await prisma.submissionSignatory.findFirst({
     where: {
       submissionId: req.params.id,
@@ -226,7 +229,11 @@ router.post("/:id/decline", async (req: AuthRequest, res: Response) => {
 
   await prisma.submissionSignatory.update({
     where: { id: sigRow.id },
-    data: { status: "Declined", signedAt: new Date() },
+    data: {
+      status: "Declined",
+      signedAt: new Date(),
+      declineReason: reason?.trim() || null,
+    },
   });
 
   await prisma.formSubmission.update({
@@ -235,6 +242,64 @@ router.post("/:id/decline", async (req: AuthRequest, res: Response) => {
   });
 
   res.json({ success: true });
+});
+
+// ── POST /api/v1/workflow/:id/remind/:signatoryId ─────────────────────────────
+// Send a reminder email to a pending signatory.
+// Any authenticated user can trigger this (typically the submitter).
+router.post("/:id/remind/:signatoryId", async (req: AuthRequest, res: Response) => {
+  const submission = await prisma.formSubmission.findUnique({
+    where: { id: req.params.id },
+    include: {
+      submittedBy: { select: { user_name: true, finca_email: true } },
+    },
+  });
+
+  if (!submission) { res.status(404).json({ success: false, error: "Submission not found" }); return; }
+
+  const signatory = await prisma.submissionSignatory.findUnique({
+    where: { id: req.params.signatoryId },
+  });
+
+  if (!signatory || signatory.submissionId !== req.params.id) {
+    res.status(404).json({ success: false, error: "Signatory not found" });
+    return;
+  }
+
+  if (signatory.status !== "Pending") {
+    res.status(400).json({ success: false, error: `This signatory has already ${signatory.status.toLowerCase()} the form.` });
+    return;
+  }
+
+  const submitterName = submission.submittedBy?.user_name ?? "A colleague";
+  const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
+
+  await mailer.sendMail({
+    from: `Paperless <${process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
+    to: signatory.email,
+    subject: `Reminder: Your signature is required on "${submission.formName}"`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
+        <h2 style="color: #B50938; margin-bottom: 4px;">Paperless by FINCA</h2>
+        <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
+        <hr style="border-color: #e5e7eb; margin: 20px 0;" />
+        <p style="font-size: 15px; color: #111827;">Hi <strong>${signatory.userName}</strong>,</p>
+        <p style="font-size: 14px; color: #374151;">
+          This is a reminder that your signature is required on the following form:
+        </p>
+        <div style="background: #f9fafb; border-left: 4px solid #B50938; border-radius: 4px; padding: 16px; margin: 16px 0;">
+          <p style="margin: 0; font-weight: 600; color: #111827;">${submission.formName}</p>
+          <p style="margin: 4px 0 0; font-size: 13px; color: #6b7280;">Reference: ${submission.reference ?? "N/A"}</p>
+          <p style="margin: 4px 0 0; font-size: 13px; color: #6b7280;">Submitted by: ${submitterName}</p>
+        </div>
+        <p style="font-size: 14px; color: #374151;">Please log in to the Paperless platform to review and sign.</p>
+        <a href="${appUrl}/dashboard/workflow" style="display: inline-block; background: #B50938; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; margin-top: 8px;">Go to Workflow Queue</a>
+        <p style="font-size: 12px; color: #9ca3af; margin-top: 24px;">If you believe this was sent in error, please contact your administrator.</p>
+      </div>
+    `,
+  });
+
+  res.json({ success: true, message: `Reminder sent to ${signatory.email}` });
 });
 
 export default router;
