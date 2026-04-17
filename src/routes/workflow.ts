@@ -1,135 +1,17 @@
-import { Router, Response, NextFunction } from "express";
+import { Router, Response } from "express";
+
 import prisma from "../lib/prisma";
 import { authenticate, AuthRequest } from "../middleware/authenticate";
 import { hashToken, decrypt } from "../lib/crypto";
 import { mailer } from "../lib/mailer";
+import { generateSubmissionPdf } from "../lib/pdfGenerator";
+import { isSharePointEnabled, uploadToSharePoint } from "../lib/sharepoint";
+import fs from "fs/promises";
+import path from "path";
 
 const router = Router();
-
-// ── SSE helper: inject query token before authenticate middleware ──────────────
-// Native EventSource cannot set custom headers, so the frontend passes the JWT
-// as ?token=<jwt>. This inline middleware promotes it to the Authorization header
-// before the authenticate middleware validates it.
-const injectQueryToken = (req: AuthRequest, _res: Response, next: NextFunction) => {
-  if (!req.headers.authorization && req.query.token) {
-    req.headers.authorization = `Bearer ${req.query.token}`;
-  }
-  next();
-};
-
-// ── GET /api/v1/workflow/queue/stream (SSE) ───────────────────────────────────
-// Real-time push of the authenticated user's signing queue.
-// Sends immediately on connect, then every 10 seconds.
-router.get(
-  "/queue/stream",
-  injectQueryToken,
-  authenticate as any,
-  async (req: AuthRequest, res: Response) => {
-    const email = req.user?.email ?? null;
-    if (!email) {
-      res.status(401).json({ success: false, error: "Not authenticated." });
-      return;
-    }
-
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    res.setHeader("X-Accel-Buffering", "no"); // critical for Railway/Nginx proxies
-    res.flushHeaders();
-
-    const sendQueue = async () => {
-      try {
-        const [normalItems, finalApprovalItems] = await Promise.all([
-          prisma.formSubmission.findMany({
-            where: {
-              signatories: {
-                some: { email: { equals: email, mode: "insensitive" }, status: "Pending" },
-              },
-              status: { not: "Awaiting Final Approval" },
-            },
-            include: {
-              signatories: { orderBy: { position: "asc" } },
-              submittedBy: { select: { user_name: true, finca_email: true, branch: true } },
-            },
-            orderBy: { createdAt: "desc" },
-          }),
-          prisma.formSubmission.findMany({
-            where: {
-              status: "Awaiting Final Approval",
-              approverEmail: { equals: email, mode: "insensitive" },
-            },
-            include: {
-              signatories: { orderBy: { position: "asc" } },
-              submittedBy: { select: { user_name: true, finca_email: true, branch: true } },
-            },
-            orderBy: { createdAt: "desc" },
-          }),
-        ]);
-
-        const eligible = normalItems.filter((sub: any) => {
-          const myRow = sub.signatories.find(
-            (s: any) => s.email.toLowerCase() === email.toLowerCase()
-          );
-          if (!myRow || myRow.status !== "Pending") return false;
-          if (sub.signingType === "parallel") return true;
-          return !sub.signatories.some(
-            (s: any) => s.position < myRow.position && s.status === "Pending"
-          );
-        });
-
-        const data = [...eligible, ...finalApprovalItems];
-        res.write(`data: ${JSON.stringify(data)}\n\n`);
-      } catch {
-        res.write(`data: []\n\n`);
-      }
-    };
-
-    await sendQueue();
-    const interval = setInterval(sendQueue, 10_000);
-    req.on("close", () => clearInterval(interval));
-  }
-);
-
-// ── GET /api/v1/workflow/submissions/stream (SSE) ─────────────────────────────
-// Real-time push of the authenticated user's own form submissions.
-// Sends immediately on connect, then every 10 seconds.
-router.get(
-  "/submissions/stream",
-  injectQueryToken,
-  authenticate as any,
-  async (req: AuthRequest, res: Response) => {
-    const userId = req.user?.id ?? null;
-    if (!userId) {
-      res.status(401).json({ success: false, error: "Not authenticated." });
-      return;
-    }
-
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    res.setHeader("X-Accel-Buffering", "no");
-    res.flushHeaders();
-
-    const sendSubmissions = async () => {
-      try {
-        const submissions = await prisma.formSubmission.findMany({
-          where: { submittedById: userId },
-          orderBy: { createdAt: "desc" },
-          include: { signatories: { orderBy: { position: "asc" } } },
-        });
-        res.write(`data: ${JSON.stringify(submissions)}\n\n`);
-      } catch {
-        res.write(`data: []\n\n`);
-      }
-    };
-
-    await sendSubmissions();
-    const interval = setInterval(sendSubmissions, 10_000);
-    req.on("close", () => clearInterval(interval));
-  }
-);
-
 router.use(authenticate as any);
+
 
 // ── GET /api/v1/workflow/queue ────────────────────────────────────────────────
 // Returns submission items in the authenticated user's signing queue
@@ -323,10 +205,57 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
     where: { submissionId: req.params.id, status: { not: "Signed" } },
   });
 
-  await prisma.formSubmission.update({
+  const updatedSubmission = await prisma.formSubmission.update({
     where: { id: req.params.id },
     data: { status: unsigned === 0 ? "Processing" : "In-review" },
   });
+
+  if (unsigned === 0) {
+    try {
+      const pdfResult = await generateSubmissionPdf(req.params.id);
+      if (pdfResult) {
+        const formFolder = updatedSubmission.formName.replace(/[\\/:*?"<>|]/g, "").trim().toUpperCase();
+        const refFolder = updatedSubmission.reference?.replace(/[\\/:*?"<>|]/g, "").trim().toUpperCase() || updatedSubmission.id.slice(-6).toUpperCase();
+        let storedPath: string = "";
+
+        if (isSharePointEnabled()) {
+          const folder = `uploads/${formFolder}/${refFolder}`;
+          storedPath = await uploadToSharePoint(
+            pdfResult.buffer,
+            pdfResult.filename,
+            "application/pdf",
+            folder
+          );
+        }
+
+        if (storedPath) {
+          const created = await prisma.submissionDocument.create({
+            data: {
+              submissionId: updatedSubmission.id,
+              fieldName: "CompletedFormPDF",
+              originalName: pdfResult.filename,
+              filePath: storedPath,
+              mimeType: "application/pdf",
+              size: pdfResult.buffer.length,
+            },
+          });
+
+          const resData = (updatedSubmission.formResponses as Record<string, any>) || {};
+          resData["CompletedFormPDF"] = [
+            { isAttachment: true, name: pdfResult.filename, url: `/api/v1/file?docId=${created.id}` }
+          ];
+          
+          await prisma.formSubmission.update({
+            where: { id: req.params.id },
+            data: { formResponses: resData },
+          });
+        }
+      }
+    } catch (err) {
+      console.error("Error generating/uploading completed PDF:", err);
+      // We don't block the actual sign completion if PDF gen fails.
+    }
+  }
 
   res.json({ success: true });
 });
@@ -424,6 +353,78 @@ router.post("/:id/remind/:signatoryId", async (req: AuthRequest, res: Response) 
   });
 
   res.json({ success: true, message: `Reminder sent to ${signatory.email}` });
+});
+
+// ── POST /api/v1/workflow/:id/generate-pdf ───────────────────────────────────
+// Manually recreate and upload the fully signed PDF if the automatic process failed
+router.post("/:id/generate-pdf", async (req: AuthRequest, res: Response) => {
+  const submission = await prisma.formSubmission.findUnique({
+    where: { id: req.params.id },
+  });
+
+  if (!submission) {
+    res.status(404).json({ success: false, error: "Submission not found" });
+    return;
+  }
+
+  try {
+    const pdfResult = await generateSubmissionPdf(req.params.id);
+    if (!pdfResult) {
+      res.status(400).json({ success: false, error: "Could not generate PDF backend output" });
+      return;
+    }
+
+    const formFolder = submission.formName.replace(/[\\/:*?"<>|]/g, "").trim().toUpperCase();
+    const refFolder = submission.reference?.replace(/[\\/:*?"<>|]/g, "").trim().toUpperCase() || submission.id.slice(-6).toUpperCase();
+    let storedPath: string = "";
+
+    if (isSharePointEnabled()) {
+      const folder = `uploads/${formFolder}/${refFolder}`;
+      storedPath = await uploadToSharePoint(
+        pdfResult.buffer,
+        pdfResult.filename,
+        "application/pdf",
+        folder
+      );
+    } else {
+      const uploadDir = process.env.UPLOAD_DIR ?? "C:\\Users\\USER\\uploads";
+      const targetDir = path.join(uploadDir, formFolder, refFolder);
+      await fs.mkdir(targetDir, { recursive: true });
+      const destPath = path.join(targetDir, pdfResult.filename);
+      await fs.writeFile(destPath, pdfResult.buffer);
+      storedPath = destPath;
+    }
+
+    if (storedPath) {
+      const created = await prisma.submissionDocument.create({
+        data: {
+          submissionId: submission.id,
+          fieldName: "CompletedFormPDF",
+          originalName: pdfResult.filename,
+          filePath: storedPath,
+          mimeType: "application/pdf",
+          size: pdfResult.buffer.length,
+        },
+      });
+
+      const resData = (submission.formResponses as Record<string, any>) || {};
+      resData["CompletedFormPDF"] = [
+        { isAttachment: true, name: pdfResult.filename, url: `/api/v1/file?docId=${created.id}` }
+      ];
+      
+      await prisma.formSubmission.update({
+        where: { id: req.params.id },
+        data: { formResponses: resData },
+      });
+
+      res.json({ success: true, message: "PDF generated and attached successfully." });
+    } else {
+      res.status(500).json({ success: false, error: "Failed to store PDF." });
+    }
+  } catch (err: any) {
+    console.error("Error manually generating PDF:", err);
+    res.status(500).json({ success: false, error: err.message || "Error generating PDF" });
+  }
 });
 
 export default router;

@@ -59,8 +59,24 @@ model FormSubmission {
   templateId     String
   template       FormTemplate        @relation(fields: [templateId], references: [id])
   signatories    SubmissionSignatory[]
+  documents      SubmissionDocument[]
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt
+}
+
+// Documents uploaded as part of a submission — organised by form / reference
+model SubmissionDocument {
+  id           String         @id @default(cuid())
+  submissionId String
+  submission   FormSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  fieldName    String         // The form field label this file belongs to
+  originalName String         // Original filename shown to users
+  filePath     String         // SharePoint: "uploads/FORM/REF/file.ext" | Local: absolute path
+  mimeType     String         @default("application/octet-stream")
+  size         Int            @default(0)
+  uploadedAt   DateTime       @default(now())
+
+  @@map("submission_documents")
 }
 
 // Each signatory on a submission - ordered by position
@@ -131,4 +147,32 @@ model ReportAccess {
 
   @@unique([reportId, userEmail])
   @@map("report_access")
+}
+
+model PdfTemplate {
+  id             String             @id @default(cuid())
+  name           String             @unique
+  sharepointPath String
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  fields         PdfTemplateField[]
+
+  @@map("pdf_templates")
+}
+
+model PdfTemplateField {
+  id         String      @id @default(cuid())
+  templateId String
+  template   PdfTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  name       String
+  type       String      // "text", "image", "signature", etc.
+  page       Int         @default(0)
+  x          Float       // Normalized 0-1
+  y          Float       // Normalized 0-1
+  width      Float       // Normalized 0-1
+  height     Float       // Normalized 0-1
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  @@map("pdf_template_fields")
 }

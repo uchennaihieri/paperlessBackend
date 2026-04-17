@@ -1,9 +1,25 @@
 import { Router, Response } from "express";
 import fs from "fs/promises";
 import path from "path";
+import multer from "multer";
 import prisma from "../lib/prisma";
 import { authenticate, AuthRequest } from "../middleware/authenticate";
 import { hashToken, decrypt } from "../lib/crypto";
+import { isSharePointEnabled, uploadToSharePoint } from "../lib/sharepoint";
+
+// Files are always buffered in memory; they go straight to SharePoint (or disk)
+// on submission — never stored in a temp location.
+const memUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 100 * 1024 * 1024 }, // 100 MB per file
+});
+
+// Sanitise a string for use as a SharePoint / filesystem folder segment.
+// Removes characters that are invalid in folder names.
+function sanitiseFolder(s: string): string {
+  return s.replace(/[\\/:*?"<>|]/g, "").trim().toUpperCase();
+}
+
 
 const router = Router();
 router.use(authenticate as any);
@@ -72,25 +88,49 @@ router.get("/:id", async (req, res: Response) => {
 });
 
 // ── POST /api/v1/submissions ──────────────────────────────────────────────────
-router.post("/", async (req: AuthRequest, res: Response) => {
+// Accepts multipart/form-data.
+// Non-file fields go in the JSON string field called "data".
+// File attachments use the form-field label as the multipart field name.
+// Files are uploaded directly to SharePoint (or local disk) under:
+//   uploads/{FORM NAME}/{REFERENCE}/{originalFilename}
+// No files are stored unless the form is actually submitted.
+router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
+  // ── Parse the JSON payload sent in the "data" field ────────────────────────
+  let payload: any = {};
+  try {
+    if (req.body?.data) {
+      payload = JSON.parse(req.body.data);
+    } else {
+      // Fallback: plain JSON body (backward compat with JSON-only clients)
+      payload = req.body;
+    }
+  } catch {
+    res.status(400).json({ success: false, error: "Invalid submission data." });
+    return;
+  }
+
   const {
     templateId,
     formName,
-    formResponses,
+    formResponses = {},
     signatories,
     signingType = "sequential",
     initiatorToken,
-  } = req.body;
+  } = payload;
 
+  if (!templateId || !formName) {
+    res.status(400).json({ success: false, error: "templateId and formName are required." });
+    return;
+  }
+
+  // ── Initiator signature token (optional) ───────────────────────────────────
   let finalSignatureData: string | null = null;
   let finalSignatureStatus = "Pending";
   let finalSignedAt: Date | null = null;
 
-  // Optionally sign as the initiator using their registered token
   if (initiatorToken) {
     const userEmail = req.user?.email;
     if (!userEmail) { res.status(401).json({ success: false, error: "Not logged in" }); return; }
-
     const hashedInput = hashToken(initiatorToken);
     const secData = await prisma.securityData.findUnique({ where: { userEmail } });
     if (!secData || secData.hashedToken !== hashedInput) {
@@ -102,7 +142,7 @@ router.post("/", async (req: AuthRequest, res: Response) => {
     finalSignedAt = new Date();
   }
 
-  // Generate reference number
+  // ── Generate reference number ───────────────────────────────────────────────
   let reference: string;
   try {
     const acronym = formName.split(" ").map((w: string) => w[0]).join("").toUpperCase();
@@ -112,50 +152,73 @@ router.post("/", async (req: AuthRequest, res: Response) => {
     reference = `REF-${Date.now()}`;
   }
 
-  // Move uploaded files into a permanent folder keyed by form/reference
-  const extractedNames: string[] = [];
-  Object.values(formResponses).forEach((val) => {
-    if (typeof val === "string") {
-      extractedNames.push(...(val as string).split(", ").map((s) => s.trim()));
-    }
-  });
+  // ── Handle file attachments ────────────────────────────────────────────────
+  // Files are uploaded NOW (at submission time) under a structured path:
+  //   uploads/{FORM NAME}/{REFERENCE}/{originalFilename}
+  const uploadedFiles = (req.files as Express.Multer.File[]) ?? [];
+  const updatedResponses: Record<string, any> = { ...formResponses };
+  const docCreates: Array<{
+    fieldName: string;
+    originalName: string;
+    filePath: string;
+    mimeType: string;
+    size: number;
+  }> = [];
 
-  const fileRecords = await prisma.uploadedFile.findMany({
-    where: { fileName: { in: extractedNames } },
-  });
+  if (uploadedFiles.length > 0) {
+    const formFolder = sanitiseFolder(formName);   // e.g. "PETTY CASH LIVE"
+    const refFolder  = sanitiseFolder(reference);  // e.g. "PCL1"
 
-  let updatedResponses = { ...formResponses };
-
-  if (fileRecords.length > 0) {
-    const uploadDir = process.env.UPLOAD_DIR ?? "C:\\Users\\USER\\uploads";
-    const targetDir = path.join(uploadDir, formName, reference);
-    await fs.mkdir(targetDir, { recursive: true });
-
-    for (const record of fileRecords) {
-      const newFilePath = path.join(targetDir, record.fileName);
-      try {
-        await fs.rename(record.filePath, newFilePath);
-        await prisma.uploadedFile.update({ where: { id: record.id }, data: { filePath: newFilePath } });
-      } catch (e) {
-        console.error("Failed to move file", record.filePath, e);
-      }
+    // Group by fieldname so we can build the attachment array per field
+    const byField: Record<string, Express.Multer.File[]> = {};
+    for (const file of uploadedFiles) {
+      if (!byField[file.fieldname]) byField[file.fieldname] = [];
+      byField[file.fieldname].push(file);
     }
 
-    for (const [key, val] of Object.entries(updatedResponses)) {
-      if (typeof val === "string") {
-        const parts = (val as string).split(", ").map((s: string) => s.trim());
-        const matching = fileRecords.filter((r: any) => parts.includes(r.fileName));
-        if (matching.length > 0) {
-          updatedResponses[key] = matching.map((r: any) => ({
-            isAttachment: true,
-            name: r.originalName,
-            url: `/api/v1/file?id=${r.id}`,
-          }));
+    for (const [fieldName, files] of Object.entries(byField)) {
+      const attachments: Array<{ isAttachment: true; name: string; url: string }> = [];
+
+      for (const file of files) {
+        let storedPath: string;
+
+        if (isSharePointEnabled()) {
+          // SharePoint folder: uploads/PETTY CASH LIVE/PCL1
+          const folder = `uploads/${formFolder}/${refFolder}`;
+          storedPath = await uploadToSharePoint(
+            file.buffer,
+            file.originalname,
+            file.mimetype || "application/octet-stream",
+            folder
+          );
+        } else {
+          // Local disk: {UPLOAD_DIR}/PETTY CASH LIVE/PCL1/file.pdf
+          const uploadDir = process.env.UPLOAD_DIR ?? "C:\\Users\\USER\\uploads";
+          const targetDir = path.join(uploadDir, formFolder, refFolder);
+          await fs.mkdir(targetDir, { recursive: true });
+          const destPath = path.join(targetDir, file.originalname);
+          await fs.writeFile(destPath, file.buffer);
+          storedPath = destPath;
         }
+
+        // Queue the SubmissionDocument record (created after the submission row exists)
+        docCreates.push({
+          fieldName,
+          originalName: file.originalname,
+          filePath:     storedPath,
+          mimeType:     file.mimetype || "application/octet-stream",
+          size:         file.size,
+        });
+
+        // Placeholder URL — will be filled in after we have the document ID below
+        attachments.push({ isAttachment: true, name: file.originalname, url: "__pending__" });
       }
+
+      updatedResponses[fieldName] = attachments;
     }
   }
 
+  // ── Create the FormSubmission row ──────────────────────────────────────────
   const sigsInput: Array<{ position: number; userName: string; email: string }> =
     signatories ?? [];
 
@@ -169,17 +232,53 @@ router.post("/", async (req: AuthRequest, res: Response) => {
       templateId,
       signatories: {
         create: sigsInput.map((s) => ({
-          position: s.position,
-          userName: s.userName,
-          email: s.email,
-          status: s.position === 1 && finalSignatureStatus === "Signed" ? "Signed" : "Pending",
+          position:      s.position,
+          userName:      s.userName,
+          email:         s.email,
+          status:        s.position === 1 && finalSignatureStatus === "Signed" ? "Signed" : "Pending",
           signatureData: s.position === 1 ? finalSignatureData : null,
-          signedAt: s.position === 1 && finalSignatureStatus === "Signed" ? finalSignedAt : null,
+          signedAt:      s.position === 1 && finalSignatureStatus === "Signed" ? finalSignedAt : null,
         })),
       },
     },
     include: { signatories: true },
   });
+
+  // ── Create SubmissionDocument records and patch formResponses URLs ─────────
+  if (docCreates.length > 0) {
+    const finalResponses = { ...updatedResponses };
+    const fieldDocUrls: Record<string, string[]> = {};
+
+    for (const doc of docCreates) {
+      const created = await prisma.submissionDocument.create({
+        data: { submissionId: submission.id, ...doc },
+      });
+
+      if (!fieldDocUrls[doc.fieldName]) fieldDocUrls[doc.fieldName] = [];
+      fieldDocUrls[doc.fieldName].push(`/api/v1/file?docId=${created.id}`);
+    }
+
+    // Replace the __pending__ placeholder URLs with real docId-based URLs
+    for (const [fieldName, urls] of Object.entries(fieldDocUrls)) {
+      const existing = finalResponses[fieldName] as any[];
+      finalResponses[fieldName] = existing.map((att: any, i: number) => ({
+        ...att,
+        url: urls[i] ?? att.url,
+      }));
+    }
+
+    await prisma.formSubmission.update({
+      where: { id: submission.id },
+      data: { formResponses: finalResponses },
+    });
+
+    const full = await prisma.formSubmission.findUnique({
+      where: { id: submission.id },
+      include: { signatories: true, documents: true },
+    });
+    res.status(201).json({ success: true, data: full });
+    return;
+  }
 
   res.status(201).json({ success: true, data: submission });
 });
