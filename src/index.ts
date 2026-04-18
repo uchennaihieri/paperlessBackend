@@ -25,6 +25,7 @@ import reportsRouter from "./routes/reports";
 import branchesRouter from "./routes/branches";
 import templatesRouter from "./routes/templates";
 import documentsRouter from "./routes/documents";
+import historyRouter from "./routes/history";
 
 const app = express();
 const PORT = process.env.PORT ?? 4000;
@@ -78,6 +79,7 @@ v1.use("/reports", reportsRouter);
 v1.use("/branches", branchesRouter);
 v1.use("/templates", templatesRouter);
 v1.use("/documents", documentsRouter);
+v1.use("/history", historyRouter);
 
 
 app.use("/api/v1", v1);
