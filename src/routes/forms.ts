@@ -58,7 +58,7 @@ router.get("/:id", async (req, res: Response) => {
 
 // ── POST /api/v1/forms ─────────────────────────────────────────────────────────
 router.post("/", requireAdmin as any, async (req: AuthRequest, res: Response) => {
-  const { name, description, fields, formOwner, formTreater, htmlTemplate } = req.body;
+  const { name, description, fields, formOwner, formTreater, htmlTemplate, pdfGeneratorType, pdfTemplateId } = req.body;
   try {
     const template = await prisma.formTemplate.create({
       data: {
@@ -68,9 +68,12 @@ router.post("/", requireAdmin as any, async (req: AuthRequest, res: Response) =>
         formOwner: formOwner ?? null,
         formTreater: formTreater ?? null,
         htmlTemplate: htmlTemplate ?? null,
+        pdfGeneratorType: pdfGeneratorType ?? "none",
+        pdfTemplateId: pdfTemplateId || null,
       },
     });
     res.status(201).json({ success: true, data: template });
+
   } catch (err: any) {
     if (err?.code === "P2002") {
       res.status(409).json({ success: false, error: "A form with this name already exists." });
@@ -82,7 +85,7 @@ router.post("/", requireAdmin as any, async (req: AuthRequest, res: Response) =>
 
 // ── PATCH /api/v1/forms/:id ───────────────────────────────────────────────────
 router.patch("/:id", requireAdmin as any, async (req: AuthRequest, res: Response) => {
-  const { name, description, fields, formOwner, formTreater, htmlTemplate } = req.body;
+  const { name, description, fields, formOwner, formTreater, htmlTemplate, pdfGeneratorType, pdfTemplateId } = req.body;
   try {
     const template = await prisma.formTemplate.update({
       where: { id: req.params.id },
@@ -93,6 +96,8 @@ router.patch("/:id", requireAdmin as any, async (req: AuthRequest, res: Response
         formOwner: formOwner ?? null,
         formTreater: formTreater ?? null,
         htmlTemplate: htmlTemplate ?? null,
+        pdfGeneratorType: pdfGeneratorType ?? "none",
+        pdfTemplateId: pdfTemplateId || null,
       },
     });
     res.json({ success: true, data: template });

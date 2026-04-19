@@ -38,6 +38,9 @@ model FormTemplate {
   htmlTemplate String? @db.Text // Store the raw HTML string template
   formOwner   String?  // The branch that owns/creates this form
   formTreater String?  // The branch responsible for treating/processing this form
+  pdfGeneratorType String @default("none") // "none", "document", "html"
+  pdfTemplateId    String?
+  pdfTemplate      PdfTemplate? @relation(fields: [pdfTemplateId], references: [id])
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   submissions FormSubmission[]
@@ -152,27 +155,30 @@ model ReportAccess {
 model PdfTemplate {
   id             String             @id @default(cuid())
   name           String             @unique
+  type           String             @default("document") // "document" | "html"
   sharepointPath String
   createdAt      DateTime           @default(now())
   updatedAt      DateTime           @updatedAt
   fields         PdfTemplateField[]
+  formTemplates  FormTemplate[]
 
   @@map("pdf_templates")
 }
 
 model PdfTemplateField {
-  id         String      @id @default(cuid())
-  templateId String
-  template   PdfTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
-  name       String
-  type       String      // "text", "image", "signature", etc.
-  page       Int         @default(0)
-  x          Float       // Normalized 0-1
-  y          Float       // Normalized 0-1
-  width      Float       // Normalized 0-1
-  height     Float       // Normalized 0-1
-  createdAt  DateTime    @default(now())
-  updatedAt  DateTime    @updatedAt
+  id          String      @id @default(cuid())
+  templateId  String
+  template    PdfTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  name        String
+  type        String      // "text", "image", "signature", etc.
+  mappingPath String?     // e.g. "submitterEmail" or "Metadata.formTitle". If null, acts as Form Input
+  page        Int         @default(0)
+  x           Float       // Normalized 0-1
+  y           Float       // Normalized 0-1
+  width       Float       // Normalized 0-1
+  height      Float       // Normalized 0-1
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
 
   @@map("pdf_template_fields")
 }

@@ -1,130 +1,241 @@
 import puppeteer from "puppeteer";
+import Handlebars from "handlebars";
 import prisma from "./prisma";
 import { PDFDocument, rgb } from "pdf-lib";
 import { downloadFromSharePoint } from "./sharepoint";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// resolveContextPath
+// Resolves a dot-notation mappingPath against the unified context object.
+// Supports numeric index segments (e.g. "Signatories.0.name" → array[0].name).
+// ─────────────────────────────────────────────────────────────────────────────
+function resolveContextPath(path: string, ctx: Record<string, any>): any {
+  const segments = path.split(".");
+  let cur: any = ctx;
+  for (const seg of segments) {
+    if (cur === null || cur === undefined) return "";
+    const idx = Number(seg);
+    cur = isNaN(idx) ? cur[seg] : (Array.isArray(cur) ? cur[idx] : cur[seg]);
+  }
+  return cur ?? "";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// buildUnifiedContext
+// Builds the canonical unified object available in every HTML render.
+// Array properties (Questions, Signatories) are always proper JS Arrays.
+// ─────────────────────────────────────────────────────────────────────────────
+async function buildUnifiedContext(submission: any, pdfDataMapping: Record<string, any>) {
+  const raw = submission.formResponses as Record<string, any>;
+
+  // Build Questions array — skip file attachments
+  const Questions: { index: number; label: string; value: string }[] = [];
+  let qi = 1;
+  for (const [label, val] of Object.entries(raw)) {
+    if (Array.isArray(val) && val[0]?.isAttachment) continue;
+    const displayVal = Array.isArray(val) ? val.join(", ") : String(val ?? "");
+    Questions.push({ index: qi++, label, value: displayVal });
+  }
+
+  // Batch-lookup Users by email to get job title (user_role) for each signatory
+  const signatoryEmails = (submission.signatories as any[]).map((s: any) => s.email).filter(Boolean);
+  const userRecords = await prisma.user.findMany({
+    where: { finca_email: { in: signatoryEmails } },
+    select: { finca_email: true, user_role: true },
+  });
+  const roleByEmail = new Map(userRecords.map((u) => [u.finca_email, u.user_role ?? ""]));
+
+  // Build Signatories array
+  const Signatories = (submission.signatories as any[]).map((s, i) => ({
+    index:          i + 1,
+    name:           s.userName,
+    email:          s.email,
+    // jobTitle resolved from Users.user_role via email lookup
+    jobTitle:       roleByEmail.get(s.email) ?? "",
+    status:         s.status,
+    dateSigned:     s.signedAt ? new Date(s.signedAt).toLocaleDateString("en-GB") : "",
+    timeSigned:     s.signedAt ? new Date(s.signedAt).toLocaleTimeString() : "",
+    // combined date+time alias used by templates with {{this.dateTime}}
+    dateTime:       s.signedAt ? new Date(s.signedAt).toLocaleString("en-GB") : "",
+    signatureImage: s.signatureData ?? "",
+    // alias used by templates with {{this.signatureUrl}}
+    signatureUrl:   s.signatureData ?? "",
+  }));
+
+  const submitter = submission.submittedBy as any;
+
+  const unified: Record<string, any> = {
+    // Structured sections (capital keys = new standard)
+    Metadata: {
+      formTitle:     submission.formName,
+      reference:     submission.reference ?? "",
+      dateSubmitted: new Date(submission.createdAt).toLocaleDateString("en-GB"),
+      dateTime:      new Date(submission.createdAt).toLocaleString(),
+      submitter: {
+        name:   submitter?.user_name  ?? submitter?.full_name ?? "",
+        email:  submitter?.finca_email ?? submitter?.email ?? "",
+        branch: submitter?.branch ?? "",
+      },
+    },
+    Questions,
+    Responses: raw,
+    Signatories,
+
+    // Legacy flat aliases — keep so older templates keep working
+    formTitle:      submission.formName,
+    formName:       submission.formName,
+    formDate:       new Date(submission.createdAt).toLocaleDateString("en-GB"),
+    dateSubmitted:  new Date(submission.createdAt).toLocaleString(),
+    reference:      submission.reference ?? "",
+    submittedBy:    submitter?.user_name ?? "",
+    submitterEmail: submitter?.finca_email ?? "",
+    submitterBranch:submitter?.branch ?? "",
+    questions:      Questions,
+    // `responses` as [{question, answer}] — matches templates using {{#each responses}}{{this.question}}
+    responses:      Questions.map((q) => ({ question: q.label, answer: q.value })),
+    // `signatories` lowercase — full alias array so {{#each signatories}} works with all field names
+    signatories:    Signatories,
+    sign_name:      Signatories[0]?.name ?? "",
+    signature:      Signatories[0]?.signatureImage ?? "",
+    signTime:       Signatories[0]?.dateSigned ?? "",
+
+    // Form-input mapped fields (e.g. amount → "5000")
+    ...pdfDataMapping,
+  };
+
+  return unified;
+}
 
 export async function generateSubmissionPdf(id: string): Promise<{ buffer: Buffer, filename: string } | null> {
   const submission = await prisma.formSubmission.findUnique({
     where: { id },
     include: {
       signatories: { orderBy: { position: "asc" } },
-      template: true,
+      template:    true,
+      submittedBy: true,
     },
   });
 
   if (!submission) return null;
 
-  // ── 1. Check for PdfTemplate field mappings ──
+  const filename = `${submission.formName.replace(/\s+/g, "_")}-${submission.id.slice(-6)}.pdf`;
+
+  // ── 1. Resolve PDF template from FormTemplate.pdfTemplateId ──────────────────
+  const pdfTemplateId = (submission.template as any)?.pdfTemplateId ?? null;
+
+  // ── 2. Build form-input mappings (form field label → PDF field name) ─────────
   const formFields = (submission.template?.fields as any[]) || [];
   const pdfDataMapping: Record<string, any> = {};
-  const templateIdHits: Record<string, number> = {};
-
   for (const ff of formFields) {
     if (ff.mappedPdfField) {
-      // Find the response value using the label as key
       pdfDataMapping[ff.mappedPdfField] = (submission.formResponses as any)[ff.label];
-      
-      const matchingFields = await prisma.pdfTemplateField.findMany({
-        where: { name: ff.mappedPdfField }
-      });
-      for (const mf of matchingFields) {
-        templateIdHits[mf.templateId] = (templateIdHits[mf.templateId] || 0) + 1;
-      }
     }
   }
 
-  let targetPdfTemplateId: string | null = null;
-  let maxHits = 0;
-  for (const [tId, hits] of Object.entries(templateIdHits)) {
-    if (hits > maxHits) {
-      maxHits = hits;
-      targetPdfTemplateId = tId;
-    }
-  }
-
-  if (targetPdfTemplateId) {
+  if (pdfTemplateId) {
     const pdfTemplate = await prisma.pdfTemplate.findUnique({
-      where: { id: targetPdfTemplateId },
-      include: { fields: true }
+      where: { id: pdfTemplateId },
+      include: { fields: true },
     });
 
     if (pdfTemplate) {
-      try {
-        const { buffer: pdfBuffer } = await downloadFromSharePoint(pdfTemplate.sharepointPath);
-        const pdfDoc = await PDFDocument.load(pdfBuffer);
-        const pages = pdfDoc.getPages();
 
-        const signatureValues = submission.signatories.map(s => s.signatureData).filter(Boolean);
-        let sigIndex = 0;
+      // ── 2a. HTML Handlebars + Puppeteer ────────────────────────────────────
+      if ((pdfTemplate as any).type === "html") {
+        try {
+          const { buffer: htmlBuffer } = await downloadFromSharePoint(pdfTemplate.sharepointPath);
+          const htmlSource = htmlBuffer.toString("utf-8");
 
-        for (const field of pdfTemplate.fields) {
-          let val = pdfDataMapping[field.name];
+          // Build the canonical unified context
+          const unified = await buildUnifiedContext(submission, pdfDataMapping);
 
-          if (field.type === "signature") {
-             val = signatureValues[sigIndex];
-             sigIndex++;
+          // Resolve every saved field's mappingPath into the flat Handlebars context
+          for (const field of pdfTemplate.fields as any[]) {
+            if (!field.mappingPath) continue;
+            if (field.mappingPath === "FormInput") continue; // handled via pdfDataMapping already
+            unified[field.name] = resolveContextPath(field.mappingPath, unified);
           }
 
-          if (!val) continue;
+          const compiled = Handlebars.compile(htmlSource);
+          const html = compiled(unified);
 
-          const pageIndex = field.page ?? 0;
-          if (pageIndex >= pages.length || pageIndex < 0) continue;
-
-          const pdfPage = pages[pageIndex];
-          const { width: pWidth, height: pHeight } = pdfPage.getSize();
-
-          const x = field.x * pWidth;
-          const y = (1 - field.y - field.height) * pHeight;
-          const fWidth = field.width * pWidth;
-          const fHeight = field.height * pHeight;
-
-          if (field.type === "image" || field.type === "signature") {
-            try {
-              let imageBytes: Buffer;
-              let image;
-              const valStr = String(val);
-              
-              if (valStr.startsWith("data:image/jpeg") || valStr.startsWith("data:image/jpg")) {
-                imageBytes = Buffer.from(valStr.split(',')[1], 'base64');
-                image = await pdfDoc.embedJpg(imageBytes);
-              } else if (valStr.startsWith("data:image/png") || valStr.startsWith("data:image/")) {
-                imageBytes = Buffer.from(valStr.split(',')[1], 'base64');
-                image = await pdfDoc.embedPng(imageBytes);
-              } else {
-                imageBytes = Buffer.from(valStr, 'base64');
-                image = await pdfDoc.embedPng(imageBytes).catch(() => pdfDoc.embedJpg(imageBytes));
-              }
-
-              if (image) {
-                pdfPage.drawImage(image, { x, y, width: fWidth, height: fHeight });
-              }
-            } catch (e) {
-              console.error(`Error embedding image for field ${field.name}`, e);
-            }
-          } else {
-            pdfPage.drawText(String(val), {
-              x,
-              y: pHeight - (field.y * pHeight) - 12,
-              size: 12,
-              color: rgb(0, 0, 0),
-            });
+          let browser: Awaited<ReturnType<typeof puppeteer.launch>> | undefined;
+          try {
+            browser = await puppeteer.launch({ headless: true, channel: "chrome" });
+          } catch {
+            browser = await puppeteer.launch({ headless: true, channel: "msedge" as any });
           }
+
+          const pg = await browser.newPage();
+          await pg.setContent(html, { waitUntil: "networkidle0" });
+          const pdfBuffer = await pg.pdf({ format: "A4", printBackground: true });
+          await browser.close();
+
+          return { buffer: Buffer.from(pdfBuffer), filename };
+        } catch (err) {
+          console.error("Failed generating HTML PDF, falling back to auto-gen:", err);
         }
+      }
 
-        const finalPdfBytes = await pdfDoc.save();
-        const filename = `${submission.formName.replace(/\\s+/g, "_")}-${submission.id.slice(-6)}.pdf`;
-        return { buffer: Buffer.from(finalPdfBytes), filename };
-      } catch (err) {
-        console.error("Failed generating overlaid PDF, falling back to HTML auto-gen:", err);
-        // We catch errors and just let it fall back naturally to HTML generation
+      // ── 2b. Document pdf-lib overlay ───────────────────────────────────────
+      else {
+        try {
+          const { buffer: pdfBuffer } = await downloadFromSharePoint(pdfTemplate.sharepointPath);
+          const pdfDoc = await PDFDocument.load(pdfBuffer);
+          const pages = pdfDoc.getPages();
+
+          const signatureValues = (submission.signatories as any[]).map((s) => s.signatureData).filter(Boolean);
+          let sigIndex = 0;
+
+          for (const field of pdfTemplate.fields as any[]) {
+            let val = pdfDataMapping[field.name];
+            if (field.type === "signature") { val = signatureValues[sigIndex]; sigIndex++; }
+            if (!val) continue;
+
+            const pageIndex = field.page ?? 0;
+            if (pageIndex >= pages.length || pageIndex < 0) continue;
+            const pdfPage = pages[pageIndex];
+            const { width: pWidth, height: pHeight } = pdfPage.getSize();
+
+            const x      = field.x * pWidth;
+            const y      = (1 - field.y - field.height) * pHeight;
+            const fWidth  = field.width * pWidth;
+            const fHeight = field.height * pHeight;
+
+            if (field.type === "image" || field.type === "signature") {
+              try {
+                let imageBytes: Buffer;
+                let image;
+                const valStr = String(val);
+                if (valStr.startsWith("data:image/jpeg") || valStr.startsWith("data:image/jpg")) {
+                  imageBytes = Buffer.from(valStr.split(",")[1], "base64");
+                  image = await pdfDoc.embedJpg(imageBytes);
+                } else {
+                  imageBytes = Buffer.from(valStr.includes(",") ? valStr.split(",")[1] : valStr, "base64");
+                  image = await pdfDoc.embedPng(imageBytes).catch(() => pdfDoc.embedJpg(imageBytes));
+                }
+                if (image) pdfPage.drawImage(image, { x, y, width: fWidth, height: fHeight });
+              } catch (e) { console.error(`Error embedding image for field ${field.name}`, e); }
+            } else {
+              pdfPage.drawText(String(val), { x, y: pHeight - (field.y * pHeight) - 12, size: 12, color: rgb(0, 0, 0) });
+            }
+          }
+
+          const finalPdfBytes = await pdfDoc.save();
+          return { buffer: Buffer.from(finalPdfBytes), filename };
+        } catch (err) {
+          console.error("Failed generating overlaid PDF, falling back to auto-gen:", err);
+        }
       }
     }
   }
 
+  // ── 2. Fallback: auto-generated HTML via Puppeteer ───────────────────────────
   let htmlContent = "";
 
   if (submission.template?.htmlTemplate) {
-    htmlContent = submission.template.htmlTemplate.replace(/\{\{([^}]+)\}\}/g, (_match: any, p1: any) => {
+    // Legacy FormTemplate.htmlTemplate (simple {{variable}} interpolation)
+    htmlContent = (submission.template.htmlTemplate as string).replace(/\{\{([^}]+)\}\}/g, (_match: any, p1: any) => {
       const key = p1.trim();
       const responses = submission.formResponses as Record<string, any>;
 
@@ -226,6 +337,5 @@ export async function generateSubmissionPdf(id: string): Promise<{ buffer: Buffe
   const pdfBuffer = await page.pdf({ format: "A4", printBackground: true });
   await browser.close();
 
-  const filename = `${submission.formName.replace(/\\s+/g, "_")}-${submission.id.slice(-6)}.pdf`;
   return { buffer: Buffer.from(pdfBuffer), filename };
 }
