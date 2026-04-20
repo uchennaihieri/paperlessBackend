@@ -151,9 +151,47 @@ router.post("/:id/approve", async (req: AuthRequest, res: Response) => {
     return;
   }
 
+  // Resolve the approver's real display name from the users table
+  const approverUser = await prisma.user.findFirst({
+    where: { finca_email: { equals: email, mode: "insensitive" } },
+    select: { user_name: true },
+  });
+  const approverName = approverUser?.user_name ?? email;
+
   await prisma.formSubmission.update({
     where: { id: req.params.id },
-    data: { status: "Completed" },
+    data: {
+      status: "Completed",
+      approvedBy: approverName,
+      approverEmail: email,
+    },
+  });
+  res.json({ success: true });
+});
+
+// ── POST /api/v1/workflow/:id/decline-final ────────────────────────────────────
+// Final approver declines → submission reverts to Processing (no signatory row needed)
+router.post("/:id/decline-final", async (req: AuthRequest, res: Response) => {
+  const email = req.user?.email ?? null;
+  if (!email) { res.status(401).json({ success: false, error: "Not authenticated." }); return; }
+
+  const sub = await prisma.formSubmission.findUnique({
+    where: { id: req.params.id },
+    select: { status: true, approverEmail: true },
+  });
+
+  if (!sub || sub.status !== "Awaiting Final Approval") {
+    res.status(400).json({ success: false, error: "Submission is not awaiting final approval." });
+    return;
+  }
+  if (sub.approverEmail?.toLowerCase() !== email.toLowerCase()) {
+    res.status(403).json({ success: false, error: "You are not the designated approver." });
+    return;
+  }
+
+  await prisma.formSubmission.update({
+    where: { id: req.params.id },
+    data: { status: "Processing", approvedBy: null, approverEmail: null },
   });
   res.json({ success: true });
 });
