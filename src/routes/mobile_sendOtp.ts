@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
-import prisma from "../../lib/prisma";
-import { mailer } from "../../lib/mailer";
+import prisma from "../lib/prisma";
+import { mailer } from "../lib/mailer";
 import crypto from "crypto";
 
 const router = Router();

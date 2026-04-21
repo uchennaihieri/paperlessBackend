@@ -200,3 +200,17 @@ model PdfTemplateField {
 
   @@map("pdf_template_fields")
 }
+
+// Logs identity verification API responses to prevent multiple external API hits within 96 hours
+model IdentityVerificationLog {
+  id           String   @id @default(cuid())
+  idType       String   // "bvn" or "nin"
+  idNumber     String
+  requestData  Json     // the payload sent (firstname, lastname, etc.)
+  responseData Json     // the QoreID response
+  verifiedBy   String   // Email of the user who performed it
+  createdAt    DateTime @default(now())
+
+  @@index([idType, idNumber])
+  @@map("identity_verification_logs")
+}

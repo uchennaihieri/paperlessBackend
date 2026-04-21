@@ -20,13 +20,18 @@ import teamsRouter from "./routes/teams";
 import uploadRouter from "./routes/upload";
 import filesRouter from "./routes/files";
 import pdfRouter from "./routes/pdf";
-import mobileRouter from "./routes/mobile";
+import mobileSendOtpRouter from "./routes/mobile_sendOtp";
+import mobileVerifyOtpRouter from "./routes/mobile_verifyOtp";
+import mobileDashboardRouter from "./routes/mobile_dashboard";
+import mobileDepositRouter from "./routes/mobile_deposit";
+import mobilePartialRouter from "./routes/mobile_partial";
 import reportsRouter from "./routes/reports";
 import branchesRouter from "./routes/branches";
 import templatesRouter from "./routes/templates";
 import documentsRouter from "./routes/documents";
 import historyRouter from "./routes/history";
 import auditRouter from "./routes/audit";
+import identityRouter from "./routes/identity";
 
 const app = express();
 const PORT = process.env.PORT ?? 4000;
@@ -75,14 +80,18 @@ v1.use("/teams", teamsRouter);
 v1.use("/upload", uploadRouter);
 v1.use("/file", filesRouter);
 v1.use("/pdf", pdfRouter);
-v1.use("/mobile", mobileRouter);
+v1.use("/mobile_send-otp", mobileSendOtpRouter);
+v1.use("/mobile_verify-otp", mobileVerifyOtpRouter);
+v1.use("/mobile_dashboard", mobileDashboardRouter);
+v1.use("/mobile_deposit", mobileDepositRouter);
+v1.use("/mobile_partial", mobilePartialRouter);
 v1.use("/reports", reportsRouter);
 v1.use("/branches", branchesRouter);
 v1.use("/templates", templatesRouter);
 v1.use("/documents", documentsRouter);
 v1.use("/history", historyRouter);
 v1.use("/audit", auditRouter);
-
+v1.use("/identity", identityRouter);
 
 
 app.use("/api/v1", v1);
