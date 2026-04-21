@@ -12,6 +12,24 @@ import path from "path";
 const router = Router();
 router.use(authenticate as any);
 
+// ── Audit trail helper ────────────────────────────────────────────────────────
+async function logAudit(opts: {
+  submissionId: string;
+  formReference?: string | null;
+  prevStatus: string;
+  newStatus: string;
+  action: string;
+  actorName?: string | null;
+  actorEmail?: string | null;
+  note?: string | null;
+}) {
+  try {
+    await prisma.formAuditTrail.create({ data: opts });
+  } catch (e) {
+    console.error("[audit] failed to write trail:", e);
+  }
+}
+
 
 // ── GET /api/v1/workflow/queue ────────────────────────────────────────────────
 // Returns submission items in the authenticated user's signing queue
@@ -96,29 +114,81 @@ router.get("/submissions/:id", async (req, res: Response) => {
 
 // ── POST /api/v1/workflow/:id/assign-self ─────────────────────────────────────
 router.post("/:id/assign-self", async (req: AuthRequest, res: Response) => {
-  const userName =
-    req.user?.user_name ?? req.user?.email ?? "Unknown";
+  const userName = req.user?.user_name ?? req.user?.email ?? "Unknown";
+  const email     = req.user?.email ?? null;
   const firstName = userName.split(" ")[0];
   const newStatus = `Assigned to ${firstName}`;
+
+  const current = await prisma.formSubmission.findUnique({
+    where: { id: req.params.id },
+    select: { status: true, reference: true },
+  });
 
   await prisma.formSubmission.update({
     where: { id: req.params.id },
     data: { status: newStatus, treatedBy: userName },
   });
+
+  await logAudit({
+    submissionId:  req.params.id,
+    formReference: current?.reference,
+    prevStatus:    current?.status ?? "",
+    newStatus,
+    action:        "assigned",
+    actorName:     userName,
+    actorEmail:    email,
+  });
+
   res.json({ success: true, newStatus });
 });
 
-// ── POST /api/v1/workflow/:id/complete ────────────────────────────────────────
-// Complete processing: optionally route to a final approver
-router.post("/:id/complete", async (req, res: Response) => {
-  const { approverEmail, approverName } = req.body;
+// ── POST /api/v1/workflow/:id/complete ─────────────────────────────────────────
+// Complete processing: optionally route to a final approver.
+// A signatureToken is ALWAYS required from the treater, regardless of routing.
+router.post("/:id/complete", async (req: AuthRequest, res: Response) => {
+  const { approverEmail, approverName, signatureToken } = req.body;
+  const email = req.user?.email ?? null;
+
+  // Always require the treater's token
+  if (!email) { res.status(401).json({ success: false, error: "Not authenticated." }); return; }
+  if (!signatureToken) {
+    res.status(400).json({ success: false, error: "Your signature token is required." });
+    return;
+  }
+  const hashedInput = hashToken(signatureToken);
+  const secData = await prisma.securityData.findUnique({ where: { userEmail: email } });
+  if (!secData || secData.hashedToken !== hashedInput) {
+    res.status(400).json({ success: false, error: "Invalid signature token. Please check and try again." });
+    return;
+  }
+
+  const current = await prisma.formSubmission.findUnique({
+    where: { id: req.params.id },
+    select: { status: true, reference: true },
+  });
+  const treaterUser = await prisma.user.findFirst({
+    where: { finca_email: { equals: email!, mode: "insensitive" } },
+    select: { user_name: true },
+  });
+  const treaterName = treaterUser?.user_name ?? email ?? "Unknown";
 
   if (!approverEmail) {
     await prisma.formSubmission.update({
       where: { id: req.params.id },
       data: { status: "Completed", approvedBy: "None", approverEmail: null },
     });
+    await logAudit({
+      submissionId:  req.params.id,
+      formReference: current?.reference,
+      prevStatus:    current?.status ?? "",
+      newStatus:     "Completed",
+      action:        "completed",
+      actorName:     treaterName,
+      actorEmail:    email,
+      note:          "Completed without further approval",
+    });
   } else {
+    // Routing to a final approver
     await prisma.formSubmission.update({
       where: { id: req.params.id },
       data: {
@@ -127,15 +197,31 @@ router.post("/:id/complete", async (req, res: Response) => {
         approverEmail,
       },
     });
+    await logAudit({
+      submissionId:  req.params.id,
+      formReference: current?.reference,
+      prevStatus:    current?.status ?? "",
+      newStatus:     "Awaiting Final Approval",
+      action:        "routed_for_approval",
+      actorName:     treaterName,
+      actorEmail:    email,
+      note:          `Routed to ${approverName ?? approverEmail} (${approverEmail})`,
+    });
   }
   res.json({ success: true });
 });
 
 // ── POST /api/v1/workflow/:id/approve ─────────────────────────────────────────
-// Final approver marks a submission as Completed
+// Final approver signs off with their token and marks the submission as Completed
 router.post("/:id/approve", async (req: AuthRequest, res: Response) => {
   const email = req.user?.email ?? null;
   if (!email) { res.status(401).json({ success: false, error: "Not authenticated." }); return; }
+
+  const { signatureToken } = req.body;
+  if (!signatureToken) {
+    res.status(400).json({ success: false, error: "Your signature token is required to approve." });
+    return;
+  }
 
   const sub = await prisma.formSubmission.findUnique({
     where: { id: req.params.id },
@@ -151,12 +237,25 @@ router.post("/:id/approve", async (req: AuthRequest, res: Response) => {
     return;
   }
 
-  // Resolve the approver's real display name from the users table
+  // Validate token
+  const hashedInput = hashToken(signatureToken);
+  const secData = await prisma.securityData.findUnique({ where: { userEmail: email } });
+  if (!secData || secData.hashedToken !== hashedInput) {
+    res.status(400).json({ success: false, error: "Invalid signature token. Please check and try again." });
+    return;
+  }
+
+  // Resolve the approver's real display name
   const approverUser = await prisma.user.findFirst({
     where: { finca_email: { equals: email, mode: "insensitive" } },
     select: { user_name: true },
   });
   const approverName = approverUser?.user_name ?? email;
+
+  const currentForApprove = await prisma.formSubmission.findUnique({
+    where: { id: req.params.id },
+    select: { status: true, reference: true },
+  });
 
   await prisma.formSubmission.update({
     where: { id: req.params.id },
@@ -166,6 +265,17 @@ router.post("/:id/approve", async (req: AuthRequest, res: Response) => {
       approverEmail: email,
     },
   });
+
+  await logAudit({
+    submissionId:  req.params.id,
+    formReference: currentForApprove?.reference,
+    prevStatus:    currentForApprove?.status ?? "",
+    newStatus:     "Completed",
+    action:        "approved",
+    actorName:     approverName,
+    actorEmail:    email,
+  });
+
   res.json({ success: true });
 });
 
@@ -177,7 +287,7 @@ router.post("/:id/decline-final", async (req: AuthRequest, res: Response) => {
 
   const sub = await prisma.formSubmission.findUnique({
     where: { id: req.params.id },
-    select: { status: true, approverEmail: true },
+    select: { status: true, approverEmail: true, reference: true },
   });
 
   if (!sub || sub.status !== "Awaiting Final Approval") {
@@ -189,10 +299,28 @@ router.post("/:id/decline-final", async (req: AuthRequest, res: Response) => {
     return;
   }
 
+  const declinedFinalUser = await prisma.user.findFirst({
+    where: { finca_email: { equals: email!, mode: "insensitive" } },
+    select: { user_name: true },
+  });
+  const declinedFinalName = declinedFinalUser?.user_name ?? email;
+
   await prisma.formSubmission.update({
     where: { id: req.params.id },
     data: { status: "Processing", approvedBy: null, approverEmail: null },
   });
+
+  await logAudit({
+    submissionId:  req.params.id,
+    formReference: sub.reference ?? null,
+    prevStatus:    "Awaiting Final Approval",
+    newStatus:     "Processing",
+    action:        "final_declined",
+    actorName:     declinedFinalName,
+    actorEmail:    email,
+    note:          "Final approver declined — returned to Processing",
+  });
+
   res.json({ success: true });
 });
 
@@ -243,26 +371,54 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
     where: { submissionId: req.params.id, status: { not: "Signed" } },
   });
 
-  const updatedSubmission = await prisma.formSubmission.update({
+  const currentForSign = await prisma.formSubmission.findUnique({
     where: { id: req.params.id },
-    data: { status: unsigned === 0 ? "Processing" : "In-review" },
+    select: { status: true, reference: true },
   });
 
+  const signerUser = await prisma.user.findFirst({
+    where: { finca_email: { equals: email!, mode: "insensitive" } },
+    select: { user_name: true },
+  });
+  const signerName = signerUser?.user_name ?? email;
+
+  const newSignStatus = unsigned === 0 ? "Processing" : "In-review";
+
+  const updatedSubmission = await prisma.formSubmission.update({
+    where: { id: req.params.id },
+    data: { status: newSignStatus },
+  });
+
+  await logAudit({
+    submissionId:  req.params.id,
+    formReference: currentForSign?.reference,
+    prevStatus:    currentForSign?.status ?? "",
+    newStatus:     newSignStatus,
+    action:        "signed",
+    actorName:     signerName,
+    actorEmail:    email,
+    note:          unsigned === 0 ? "Last signature — all signers complete" : `${unsigned} signature(s) still pending`,
+  });
+
+  // ── Respond immediately — signer should never wait for PDF/SharePoint ─────
+  res.json({ success: true });
+
+  // ── Background: generate + store the PDF once all signers are done ─────────
   if (unsigned === 0) {
-    try {
-      const pdfResult = await generateSubmissionPdf(req.params.id);
-      if (pdfResult) {
+    setImmediate(async () => {
+      try {
+        const pdfResult = await generateSubmissionPdf(req.params.id);
+        if (!pdfResult) return;
+
         const formFolder = updatedSubmission.formName.replace(/[\\/:*?"<>|]/g, "").trim().toUpperCase();
-        const refFolder = updatedSubmission.reference?.replace(/[\\/:*?"<>|]/g, "").trim().toUpperCase() || updatedSubmission.id.slice(-6).toUpperCase();
-        let storedPath: string = "";
+        const refFolder  = updatedSubmission.reference?.replace(/[\\/:*?"<>|]/g, "").trim().toUpperCase()
+                           || updatedSubmission.id.slice(-6).toUpperCase();
+        let storedPath = "";
 
         if (isSharePointEnabled()) {
-          const folder = `uploads/${formFolder}/${refFolder}`;
           storedPath = await uploadToSharePoint(
-            pdfResult.buffer,
-            pdfResult.filename,
-            "application/pdf",
-            folder
+            pdfResult.buffer, pdfResult.filename, "application/pdf",
+            `uploads/${formFolder}/${refFolder}`
           );
         }
 
@@ -270,33 +426,31 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
           const created = await prisma.submissionDocument.create({
             data: {
               submissionId: updatedSubmission.id,
-              fieldName: "CompletedFormPDF",
+              fieldName:    "CompletedFormPDF",
               originalName: pdfResult.filename,
-              filePath: storedPath,
-              mimeType: "application/pdf",
-              size: pdfResult.buffer.length,
+              filePath:     storedPath,
+              mimeType:     "application/pdf",
+              size:         pdfResult.buffer.length,
             },
           });
 
           const resData = (updatedSubmission.formResponses as Record<string, any>) || {};
           resData["CompletedFormPDF"] = [
-            { isAttachment: true, name: pdfResult.filename, url: `/api/v1/file?docId=${created.id}` }
+            { isAttachment: true, name: pdfResult.filename, url: `/api/v1/file?docId=${created.id}` },
           ];
-          
           await prisma.formSubmission.update({
             where: { id: req.params.id },
-            data: { formResponses: resData },
+            data:  { formResponses: resData },
           });
+          console.info(`[pdf] Generated and stored: ${pdfResult.filename}`);
         }
+      } catch (err) {
+        console.error("[pdf] Background generation failed:", err);
       }
-    } catch (err) {
-      console.error("Error generating/uploading completed PDF:", err);
-      // We don't block the actual sign completion if PDF gen fails.
-    }
+    });
   }
-
-  res.json({ success: true });
 });
+
 
 // ── POST /api/v1/workflow/:id/decline ────────────────────────────────────────
 router.post("/:id/decline", async (req: AuthRequest, res: Response) => {
@@ -327,9 +481,31 @@ router.post("/:id/decline", async (req: AuthRequest, res: Response) => {
     },
   });
 
+  const currentForDecline = await prisma.formSubmission.findUnique({
+    where: { id: req.params.id },
+    select: { status: true, reference: true },
+  });
+
+  const declinerUser = await prisma.user.findFirst({
+    where: { finca_email: { equals: email!, mode: "insensitive" } },
+    select: { user_name: true },
+  });
+  const declinerName = declinerUser?.user_name ?? email;
+
   await prisma.formSubmission.update({
     where: { id: req.params.id },
     data: { status: "Rejected" },
+  });
+
+  await logAudit({
+    submissionId:  req.params.id,
+    formReference: currentForDecline?.reference,
+    prevStatus:    currentForDecline?.status ?? "",
+    newStatus:     "Rejected",
+    action:        "declined",
+    actorName:     declinerName,
+    actorEmail:    email,
+    note:          reason?.trim() || null,
   });
 
   res.json({ success: true });

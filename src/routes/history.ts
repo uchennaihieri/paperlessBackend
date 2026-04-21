@@ -104,6 +104,7 @@ router.get("/", async (req: AuthRequest, res: Response) => {
   const includeSigned    = roles.length === 0 || roles.includes("signed");
   const includeTreated   = roles.length === 0 || roles.includes("treated");
   const includeApproved  = roles.length === 0 || roles.includes("approved");
+  const includeShared    = roles.length === 0 || roles.includes("shared");
 
   const [submittedIds, signatoryIds, treatedIds, approvedIds] = await Promise.all([
     // 1. Submissions the user created
@@ -163,23 +164,52 @@ router.get("/", async (req: AuthRequest, res: Response) => {
     ...signatoryIds,
     ...treatedIds,
     ...approvedIds,
-    // Add IDs from JSONB & metadata search ONLY for submissions the user has access to
-    // (intersection with the broader role set is enforced after the union via the
-    // final `id: { in: allRoleIds }` + search-match union below)
   ])];
 
-  // All IDs the user has any role on
-  const allRoleIds = new Set(allIds);
+  // ── 5. Submissions shared via "formreference" field ──────────────────────────
+  // Walk formResponses of every submission the user touched. Any field whose
+  // key normalises to "formreference" (case-insensitive, spaces stripped) is
+  // treated as a pointer to another submission. That referenced submission is
+  // added to the user's history with role "shared".
+  const sharedIds: string[] = [];
+  if (includeShared && allIds.length > 0) {
+    const responsesRaw = await prisma.formSubmission.findMany({
+      where: { id: { in: allIds } },
+      select: { formResponses: true },
+    });
 
-  // Combine: either the user has a role on it OR it matches the search
-  // (but always scoped to the owned set OR among search hits within owned set)
+    const refCodes: string[] = [];
+    for (const sub of responsesRaw) {
+      const resp = sub.formResponses as Record<string, any>;
+      for (const [key, val] of Object.entries(resp)) {
+        const norm = key.toLowerCase().replace(/[\s_-]+/g, "");
+        if (norm === "formreference" && typeof val === "string" && val.trim()) {
+          refCodes.push(val.trim());
+        }
+      }
+    }
+
+    if (refCodes.length > 0) {
+      const linked = await prisma.formSubmission.findMany({
+        where: { reference: { in: refCodes } },
+        select: { id: true },
+      });
+      sharedIds.push(...linked.map((l) => l.id));
+    }
+  }
+
+  // All IDs the user has any role on (including shared)
+  const allRoleIds = new Set([...allIds, ...sharedIds]);
+
+  // Combined final pool
+  const poolIds = [...new Set([...allIds, ...sharedIds])];
+
   let finalIds: string[];
   if (search) {
     const searchHitIds = new Set([...responseMatchIds, ...metadataMatchIds]);
-    // Keep only submissions that (a) the user has a role on AND (b) match the search
-    finalIds = allIds.filter(id => searchHitIds.has(id));
+    finalIds = poolIds.filter(id => searchHitIds.has(id));
   } else {
-    finalIds = allIds;
+    finalIds = poolIds;
   }
 
   if (finalIds.length === 0) {
@@ -210,6 +240,7 @@ router.get("/", async (req: AuthRequest, res: Response) => {
   const submittedIdSet    = new Set(submittedIds);
   const treatedIdSet      = new Set(treatedIds);
   const approvedIdSet     = new Set(approvedIds);
+  const sharedIdSet       = new Set(sharedIds);
 
   const data = rows.map((sub: any) => {
     const myRoles: string[] = [];
@@ -222,6 +253,7 @@ router.get("/", async (req: AuthRequest, res: Response) => {
     }
     if (treatedIdSet.has(sub.id))  myRoles.push("treated");
     if (approvedIdSet.has(sub.id)) myRoles.push("approved");
+    if (sharedIdSet.has(sub.id) && myRoles.length === 0) myRoles.push("shared");
 
     const mySignatory = sub.signatories.find(
       (s: any) => s.email.toLowerCase() === email.toLowerCase()

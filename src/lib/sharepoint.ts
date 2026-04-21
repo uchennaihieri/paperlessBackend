@@ -35,19 +35,28 @@ async function getAccessToken(): Promise<string> {
     scope:         "https://graph.microsoft.com/.default",
   });
 
-  const res = await fetch(
-    `https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0/token`,
-    { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: body.toString() }
-  );
-
-  const data = await res.json() as any;
-  if (!data.access_token) {
-    throw new Error(`SharePoint auth failed: ${JSON.stringify(data)}`);
+  // Retry up to 3 times — undici's connection pool can cold-start slowly
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const res = await fetch(
+        `https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0/token`,
+        { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: body.toString() }
+      );
+      const data = await res.json() as any;
+      if (!data.access_token) throw new Error(`SharePoint auth failed: ${JSON.stringify(data)}`);
+      tokenCache = { token: data.access_token, expiresAt: Date.now() + data.expires_in * 1000 };
+      return tokenCache.token;
+    } catch (err) {
+      lastErr = err;
+      if (attempt < 3) {
+        await new Promise(r => setTimeout(r, 1000 * attempt)); // 1s, 2s
+      }
+    }
   }
-
-  tokenCache = { token: data.access_token, expiresAt: Date.now() + data.expires_in * 1000 };
-  return tokenCache.token;
+  throw lastErr;
 }
+
 
 // ── Site ID cache ─────────────────────────────────────────────────────────────
 

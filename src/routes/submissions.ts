@@ -73,6 +73,25 @@ router.get("/action-items", async (req: AuthRequest, res: Response) => {
   res.json({ success: true, data: items });
 });
 
+// ── GET /api/v1/submissions/by-reference/:ref ─────────────────────────────────
+// Resolve a form reference code (e.g. "PCL001") to a full submission record.
+// Used by the frontend to turn a "formreference" field value into a clickable link.
+router.get("/by-reference/:ref", async (req, res: Response) => {
+  const submission = await prisma.formSubmission.findUnique({
+    where: { reference: req.params.ref },
+    include: {
+      signatories: { orderBy: { position: "asc" } },
+      template:    true,
+      submittedBy: { select: { user_name: true, finca_email: true, branch: true } },
+    },
+  });
+  if (!submission) {
+    res.status(404).json({ success: false, error: `No submission found with reference "${req.params.ref}"` });
+    return;
+  }
+  res.json({ success: true, data: submission });
+});
+
 // ── GET /api/v1/submissions/:id ───────────────────────────────────────────────
 router.get("/:id", async (req, res: Response) => {
   const submission = await prisma.formSubmission.findUnique({
@@ -86,6 +105,7 @@ router.get("/:id", async (req, res: Response) => {
   if (!submission) { res.status(404).json({ success: false, error: "Submission not found" }); return; }
   res.json({ success: true, data: submission });
 });
+
 
 // ── POST /api/v1/submissions ──────────────────────────────────────────────────
 // Accepts multipart/form-data.
@@ -243,6 +263,21 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
     },
     include: { signatories: true },
   });
+
+  // ── Audit: record initial submission event ──
+  prisma.formAuditTrail.create({
+    data: {
+      submissionId:  submission.id,
+      formReference: submission.reference,
+      prevStatus:    "",
+      newStatus:     "Submitted",
+      action:        "submitted",
+      actorName:     req.user?.user_name ?? req.user?.email ?? null,
+      actorEmail:    req.user?.email ?? null,
+      note:          `Form: ${formName}`,
+    },
+  }).catch((e: any) => console.error("[audit] submit:", e));
+
 
   // ── Create SubmissionDocument records and patch formResponses URLs ─────────
   if (docCreates.length > 0) {
