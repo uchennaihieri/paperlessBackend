@@ -60,7 +60,7 @@ model FormSubmission {
   submittedById  Int?
   submittedBy    User?               @relation(fields: [submittedById], references: [id])
   templateId     String
-  template       FormTemplate        @relation(fields: [templateId], references: [id])
+  template       FormTemplate        @relation(fields: [templateId], references: [id], onDelete: Cascade)
   signatories    SubmissionSignatory[]
   documents      SubmissionDocument[]
   auditTrail     FormAuditTrail[]
