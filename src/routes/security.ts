@@ -42,7 +42,9 @@ router.post("/verify-token", async (req: AuthRequest, res: Response) => {
 
   const { token } = req.body;
   const hashedInput = hashToken(token);
-  const data = await prisma.securityData.findUnique({ where: { userEmail } });
+  const data = await prisma.securityData.findFirst({
+    where: { userEmail: { equals: userEmail, mode: "insensitive" } },
+  });
 
   if (!data) {
     res.status(404).json({ success: false, error: "No security signature token found for your account." });
@@ -62,7 +64,9 @@ router.get("/my-signature", async (req: AuthRequest, res: Response) => {
   const userEmail = req.user?.email;
   if (!userEmail) { res.status(401).json({ success: false, error: "Not logged in" }); return; }
 
-  const data = await prisma.securityData.findUnique({ where: { userEmail } });
+  const data = await prisma.securityData.findFirst({
+    where: { userEmail: { equals: userEmail, mode: "insensitive" } },
+  });
   if (!data) { res.status(404).json({ success: false, error: "No signature configured yet." }); return; }
 
   const rawSignature = decrypt(data.encryptedSignature);

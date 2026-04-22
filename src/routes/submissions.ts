@@ -152,7 +152,9 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
     const userEmail = req.user?.email;
     if (!userEmail) { res.status(401).json({ success: false, error: "Not logged in" }); return; }
     const hashedInput = hashToken(initiatorToken);
-    const secData = await prisma.securityData.findUnique({ where: { userEmail } });
+    const secData = await prisma.securityData.findFirst({
+      where: { userEmail: { equals: userEmail, mode: "insensitive" } },
+    });
     if (!secData || secData.hashedToken !== hashedInput) {
       res.status(400).json({ success: false, error: "Invalid signature token." });
       return;

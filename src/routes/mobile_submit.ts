@@ -42,7 +42,9 @@ router.post("/", async (req: AuthRequest, res: Response) => {
   }
 
   const hashedInput = hashToken(initiatorToken);
-  const secData = await prisma.securityData.findUnique({ where: { userEmail } });
+  const secData = await prisma.securityData.findFirst({
+    where: { userEmail: { equals: userEmail, mode: "insensitive" } },
+  });
 
   if (!secData) {
     res.status(404).json({

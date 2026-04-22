@@ -156,7 +156,7 @@ router.post("/:id/complete", async (req: AuthRequest, res: Response) => {
     return;
   }
   const hashedInput = hashToken(signatureToken);
-  const secData = await prisma.securityData.findUnique({ where: { userEmail: email } });
+  const secData = await prisma.securityData.findFirst({ where: { userEmail: { equals: email!, mode: "insensitive" } } });
   if (!secData || secData.hashedToken !== hashedInput) {
     res.status(400).json({ success: false, error: "Invalid signature token. Please check and try again." });
     return;
@@ -239,7 +239,7 @@ router.post("/:id/approve", async (req: AuthRequest, res: Response) => {
 
   // Validate token
   const hashedInput = hashToken(signatureToken);
-  const secData = await prisma.securityData.findUnique({ where: { userEmail: email } });
+  const secData = await prisma.securityData.findFirst({ where: { userEmail: { equals: email!, mode: "insensitive" } } });
   if (!secData || secData.hashedToken !== hashedInput) {
     res.status(400).json({ success: false, error: "Invalid signature token. Please check and try again." });
     return;
@@ -336,7 +336,7 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
     const userEmail = req.user?.email;
     if (!userEmail) { res.status(401).json({ success: false, error: "Not logged in" }); return; }
     const hashedInput = hashToken(signatureToken);
-    const secData = await prisma.securityData.findUnique({ where: { userEmail } });
+    const secData = await prisma.securityData.findFirst({ where: { userEmail: { equals: userEmail!, mode: "insensitive" } } });
     if (!secData || secData.hashedToken !== hashedInput) {
       res.status(400).json({ success: false, error: "Invalid signature token." });
       return;
