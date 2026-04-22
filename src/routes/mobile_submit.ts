@@ -63,10 +63,26 @@ router.post("/", async (req: AuthRequest, res: Response) => {
   // ── Auto-create or find the FormTemplate ──────────────────────────────────
   let template = await prisma.formTemplate.findFirst({ where: { name: formName } });
   if (!template) {
+    // Generate fields from the keys of formResponses
+    const generatedFields = Object.keys(formResponses).map((key) => {
+      const val = formResponses[key];
+      let type = "text";
+      if (typeof val === "number") type = "number";
+      // To create a human readable label, capitalize and add spaces before camel case
+      const label = key.charAt(0).toUpperCase() + key.slice(1).replace(/([A-Z])/g, ' $1');
+      
+      return {
+        id: key,
+        label: label,
+        type: type,
+        required: false,
+      };
+    });
+
     template = await prisma.formTemplate.create({
       data: {
         name: formName,
-        fields: [],
+        fields: generatedFields,
         description: `Auto-generated template for mobile submission: ${formName}`,
         formOwner: "Mobile",
         formTreater: "Operations",

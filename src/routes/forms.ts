@@ -112,8 +112,16 @@ router.patch("/:id", requireAdmin as any, async (req: AuthRequest, res: Response
 
 // ── DELETE /api/v1/forms/:id ──────────────────────────────────────────────────
 router.delete("/:id", requireAdmin as any, async (req, res: Response) => {
-  await prisma.formTemplate.delete({ where: { id: req.params.id } });
-  res.json({ success: true });
+  try {
+    await prisma.formTemplate.delete({ where: { id: req.params.id } });
+    res.json({ success: true });
+  } catch (err: any) {
+    if (err?.code === "P2003") {
+      res.status(409).json({ success: false, error: "Cannot delete this template because it has existing submissions. Please delete the submissions first." });
+    } else {
+      res.status(500).json({ success: false, error: "Failed to delete form template." });
+    }
+  }
 });
 
 export default router;
