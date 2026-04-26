@@ -46,6 +46,29 @@ router.get("/search-users", async (req, res: Response) => {
   res.json({ success: true, data: users });
 });
 
+// ── GET /api/v1/forms/dynamic-options ─────────────────────────────────────────
+router.get("/dynamic-options", async (req, res: Response) => {
+  const tableName = (req.query.table ?? "") as string;
+  if (!tableName || !/^[a-zA-Z0-9_]+$/.test(tableName)) {
+    res.status(400).json({ success: false, error: "Invalid or missing table name" });
+    return;
+  }
+
+  try {
+    // The user requested a single column named "Options". We map it to 'value' and 'label' for standard frontend usage.
+    const query = `SELECT DISTINCT "Options" as option FROM "${tableName}" WHERE "Options" IS NOT NULL`;
+    const rows = await prisma.$queryRawUnsafe<any[]>(query);
+    const options = rows.map((r) => ({
+      value: r.option,
+      label: r.option,
+    }));
+    res.json({ success: true, data: options });
+  } catch (err) {
+    console.error(`Error fetching dynamic options from table ${tableName}:`, err);
+    res.status(500).json({ success: false, error: "Failed to fetch dynamic options. Verify the table and 'Options' column exist." });
+  }
+});
+
 // ── GET /api/v1/forms/:id ──────────────────────────────────────────────────────
 router.get("/:id", async (req, res: Response) => {
   const template = await prisma.formTemplate.findUnique({ where: { id: req.params.id } });
@@ -58,12 +81,14 @@ router.get("/:id", async (req, res: Response) => {
 
 // ── POST /api/v1/forms ─────────────────────────────────────────────────────────
 router.post("/", requireAdmin as any, async (req: AuthRequest, res: Response) => {
-  const { name, description, fields, formOwner, formTreater, htmlTemplate, pdfGeneratorType, pdfTemplateId } = req.body;
+  const { name, description, fields, formOwner, formTreater, htmlTemplate, pdfGeneratorType, pdfTemplateId, mobileEnabled, accountServicesEnabled } = req.body;
   try {
     const template = await prisma.formTemplate.create({
       data: {
         name,
         description,
+        mobileEnabled: mobileEnabled ?? false,
+        accountServicesEnabled: accountServicesEnabled ?? false,
         fields,
         formOwner: formOwner ?? null,
         formTreater: formTreater ?? null,
@@ -85,13 +110,15 @@ router.post("/", requireAdmin as any, async (req: AuthRequest, res: Response) =>
 
 // ── PATCH /api/v1/forms/:id ───────────────────────────────────────────────────
 router.patch("/:id", requireAdmin as any, async (req: AuthRequest, res: Response) => {
-  const { name, description, fields, formOwner, formTreater, htmlTemplate, pdfGeneratorType, pdfTemplateId } = req.body;
+  const { name, description, fields, formOwner, formTreater, htmlTemplate, pdfGeneratorType, pdfTemplateId, mobileEnabled, accountServicesEnabled } = req.body;
   try {
     const template = await prisma.formTemplate.update({
       where: { id: req.params.id },
       data: {
         name,
         description,
+        mobileEnabled: mobileEnabled ?? false,
+        accountServicesEnabled: accountServicesEnabled ?? false,
         fields,
         formOwner: formOwner ?? null,
         formTreater: formTreater ?? null,

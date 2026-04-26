@@ -18,7 +18,12 @@ router.get("/", async (req: Request, res: Response) => {
   }
 
   const submissions = await prisma.formSubmission.findMany({
-    where: { submittedById: userIdInt },
+    where: { 
+      submittedById: userIdInt,
+      template: {
+        mobileEnabled: true,
+      }
+    },
     orderBy: { updatedAt: "desc" },
     select: {
       id: true,

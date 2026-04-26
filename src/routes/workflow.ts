@@ -30,6 +30,81 @@ async function logAudit(opts: {
   }
 }
 
+// ── Prerequisite Unblock Helper ──────────────────────────────────────────────
+export async function checkAndUnblockPrerequisites(prereqSubmissionId: string) {
+  setImmediate(async () => {
+    try {
+      const prereqLink = await prisma.submissionPrerequisite.findUnique({
+        where: { prereqSubmissionId },
+        select: { id: true, mainSubmissionId: true },
+      });
+      if (!prereqLink) return;
+
+      // Mark this prerequisite as Approved
+      await prisma.submissionPrerequisite.update({
+        where: { id: prereqLink.id },
+        data: { status: "Approved" },
+      });
+
+      // Check if ALL prerequisites for the main submission are now approved
+      const remaining = await prisma.submissionPrerequisite.count({
+        where: { mainSubmissionId: prereqLink.mainSubmissionId, status: { not: "Approved" } },
+      });
+
+      if (remaining === 0) {
+        // Unblock the main submission
+        const mainSub = await prisma.formSubmission.findUnique({
+          where: { id: prereqLink.mainSubmissionId },
+          include: { signatories: { orderBy: { position: "asc" }, take: 1 } },
+        });
+        if (!mainSub || mainSub.status !== "Blocked - Awaiting Prerequisites") return;
+
+        await prisma.formSubmission.update({
+          where: { id: prereqLink.mainSubmissionId },
+          data: { status: "Submitted" },
+        });
+
+        await logAudit({
+          submissionId:  prereqLink.mainSubmissionId,
+          formReference: mainSub.reference,
+          prevStatus:    "Blocked - Awaiting Prerequisites",
+          newStatus:     "Submitted",
+          action:        "unblocked",
+          note:          "All prerequisite forms approved. Submission is now active.",
+        });
+
+        // Notify the first signatory
+        const firstSig = mainSub.signatories[0];
+        if (firstSig) {
+          const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
+          mailer.sendMail({
+            from: `Paperless <${process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
+            to: firstSig.email,
+            subject: `Action Required: "${mainSub.formName}" is now ready for your signature`,
+            html: `
+              <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
+                <h2 style="color: #B50938; margin-bottom: 4px;">Paperless by FINCA</h2>
+                <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
+                <hr style="border-color: #e5e7eb; margin: 20px 0;" />
+                <p style="font-size: 15px; color: #111827;">Hi <strong>${firstSig.userName}</strong>,</p>
+                <p style="font-size: 14px; color: #374151;">All required prerequisite forms have been completed and approved. The following submission is now ready for your signature:</p>
+                <div style="background: #f9fafb; border-left: 4px solid #B50938; border-radius: 4px; padding: 16px; margin: 16px 0;">
+                  <p style="margin: 0; font-weight: 600; color: #111827;">${mainSub.formName}</p>
+                  <p style="margin: 4px 0 0; font-size: 13px; color: #6b7280;">Reference: ${mainSub.reference ?? "N/A"}</p>
+                </div>
+                <a href="${appUrl}/dashboard/workflow" style="display: inline-block; background: #B50938; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; margin-top: 8px;">Go to Workflow Queue</a>
+                <p style="font-size: 12px; color: #9ca3af; margin-top: 24px;">If you believe this was sent in error, please contact your administrator.</p>
+              </div>
+            `,
+          }).catch((e: any) => console.error("[prereq unblock email]", e));
+        }
+      }
+    } catch (err) {
+      console.error("[prerequisites] Failed to check prerequisite unblocking:", err);
+    }
+  });
+}
+
 
 // ── GET /api/v1/workflow/queue ────────────────────────────────────────────────
 // Returns submission items in the authenticated user's signing queue
@@ -48,6 +123,12 @@ router.get("/queue", async (req: AuthRequest, res: Response) => {
       include: {
         signatories: { orderBy: { position: "asc" } },
         submittedBy: { select: { user_name: true, finca_email: true, branch: true } },
+        prerequisites: {
+          include: {
+            targetForm: { select: { name: true } },
+            prereqSubmission: { select: { reference: true, status: true } },
+          }
+        }
       },
       orderBy: { createdAt: "desc" },
     }),
@@ -59,6 +140,12 @@ router.get("/queue", async (req: AuthRequest, res: Response) => {
       include: {
         signatories: { orderBy: { position: "asc" } },
         submittedBy: { select: { user_name: true, finca_email: true, branch: true } },
+        prerequisites: {
+          include: {
+            targetForm: { select: { name: true } },
+            prereqSubmission: { select: { reference: true, status: true } },
+          }
+        }
       },
       orderBy: { createdAt: "desc" },
     }),
@@ -276,6 +363,8 @@ router.post("/:id/approve", async (req: AuthRequest, res: Response) => {
     actorEmail:    email,
   });
 
+  checkAndUnblockPrerequisites(req.params.id);
+
   res.json({ success: true });
 });
 
@@ -405,6 +494,7 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
 
   // ── Background: generate + store the PDF once all signers are done ─────────
   if (unsigned === 0) {
+    checkAndUnblockPrerequisites(req.params.id);
     setImmediate(async () => {
       try {
         const pdfResult = await generateSubmissionPdf(req.params.id);

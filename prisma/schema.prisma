@@ -34,6 +34,8 @@ model FormTemplate {
   id          String   @id @default(cuid())
   name        String   @unique
   description String?
+  mobileEnabled         Boolean @default(false)
+  accountServicesEnabled Boolean @default(false)
   fields      Json
   htmlTemplate String? @db.Text // Store the raw HTML string template
   formOwner   String?  // The branch that owns/creates this form
@@ -44,6 +46,7 @@ model FormTemplate {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   submissions FormSubmission[]
+  prerequisiteFor SubmissionPrerequisite[]
 }
 
 // Main form submission record
@@ -64,6 +67,8 @@ model FormSubmission {
   signatories    SubmissionSignatory[]
   documents      SubmissionDocument[]
   auditTrail     FormAuditTrail[]
+  prerequisites      SubmissionPrerequisite[] @relation("MainSubmission")
+  prerequisiteFor    SubmissionPrerequisite?  @relation("PrereqSubmission")
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt
 }
@@ -115,6 +120,24 @@ model SubmissionSignatory {
   declineReason  String?        @db.Text // Optional reason given when declining
 
   @@unique([submissionId, position])
+}
+
+model SubmissionPrerequisite {
+  id                 String @id @default(cuid())
+  mainSubmissionId   String
+  mainSubmission     FormSubmission @relation("MainSubmission", fields: [mainSubmissionId], references: [id], onDelete: Cascade)
+  
+  prereqSubmissionId String? @unique // Populated when the prerequisite draft is created
+  prereqSubmission   FormSubmission? @relation("PrereqSubmission", fields: [prereqSubmissionId], references: [id], onDelete: SetNull)
+  
+  targetFormId       String // The form template that must be filled
+  targetForm         FormTemplate @relation(fields: [targetFormId], references: [id])
+  
+  targetEmail        String // Email of the person required to fill it
+  
+  status             String @default("Pending") // Pending, Submitted, Approved
+  
+  @@unique([mainSubmissionId, targetFormId, targetEmail])
 }
 
 model VerificationToken {

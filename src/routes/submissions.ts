@@ -6,6 +6,9 @@ import prisma from "../lib/prisma";
 import { authenticate, AuthRequest } from "../middleware/authenticate";
 import { hashToken, decrypt } from "../lib/crypto";
 import { isSharePointEnabled, uploadToSharePoint } from "../lib/sharepoint";
+import { mailer } from "../lib/mailer";
+import { generateSubmissionPdf } from "../lib/pdfGenerator";
+import { checkAndUnblockPrerequisites } from "./workflow";
 
 // Files are always buffered in memory; they go straight to SharePoint (or disk)
 // on submission — never stored in a temp location.
@@ -44,7 +47,10 @@ router.get("/my", async (req: AuthRequest, res: Response) => {
   const submissions = await prisma.formSubmission.findMany({
     where: { submittedById: req.user.id },
     orderBy: { createdAt: "desc" },
-    include: { signatories: { orderBy: { position: "asc" } } },
+    include: { 
+      signatories: { orderBy: { position: "asc" } },
+      template: { select: { mobileEnabled: true } }
+    },
   });
   res.json({ success: true, data: submissions });
 });
@@ -136,6 +142,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
     signatories,
     signingType = "sequential",
     initiatorToken,
+    draftId,
   } = payload;
 
   if (!templateId || !formName) {
@@ -164,14 +171,39 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
     finalSignedAt = new Date();
   }
 
-  // ── Generate reference number ───────────────────────────────────────────────
-  let reference: string;
-  try {
-    const acronym = formName.split(" ").map((w: string) => w[0]).join("").toUpperCase();
-    const count = await prisma.formSubmission.count({ where: { templateId } });
-    reference = `${acronym}${count + 1}`;
-  } catch {
-    reference = `REF-${Date.now()}`;
+  // ── Generate reference number (if not a draft) ──────────────────────────────
+  let reference: string = "";
+  if (!draftId) {
+    try {
+      const acronym = formName.split(" ").map((w: string) => w[0]).join("").toUpperCase();
+      const latestSub = await prisma.formSubmission.findFirst({
+        where: { templateId },
+        orderBy: { createdAt: 'desc' },
+        select: { reference: true }
+      });
+      
+      let nextNumber = 1;
+      if (latestSub && latestSub.reference) {
+        const match = latestSub.reference.match(/\d+$/);
+        if (match) {
+          nextNumber = parseInt(match[0], 10) + 1;
+        } else {
+          const count = await prisma.formSubmission.count({ where: { templateId } });
+          nextNumber = count + 1;
+        }
+      }
+      reference = `${acronym}${nextNumber}`;
+    } catch {
+      reference = `REF-${Date.now()}`;
+    }
+  } else {
+    // For a draft, fetch the existing reference so we can use it for folder paths
+    const draft = await prisma.formSubmission.findUnique({ where: { id: draftId } });
+    if (!draft) {
+      res.status(404).json({ success: false, error: "Draft not found." });
+      return;
+    }
+    reference = draft.reference ?? `REF-${Date.now()}`;
   }
 
   // ── Handle file attachments ────────────────────────────────────────────────
@@ -240,31 +272,71 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
     }
   }
 
-  // ── Create the FormSubmission row ──────────────────────────────────────────
+  // ── Create or Update the FormSubmission row ───────────────────────────────
   const sigsInput: Array<{ position: number; userName: string; email: string }> =
     signatories ?? [];
 
-  const submission = await prisma.formSubmission.create({
-    data: {
-      formName,
-      reference,
-      formResponses: updatedResponses,
-      signingType,
-      submittedById: req.user?.id ?? null,
-      templateId,
-      signatories: {
-        create: sigsInput.map((s) => ({
-          position:      s.position,
-          userName:      s.userName,
-          email:         s.email,
-          status:        s.position === 1 && finalSignatureStatus === "Signed" ? "Signed" : "Pending",
-          signatureData: s.position === 1 ? finalSignatureData : null,
-          signedAt:      s.position === 1 && finalSignatureStatus === "Signed" ? finalSignedAt : null,
-        })),
+  // ── Determine initial status ──────────────────────────────────────────────
+  const isFullySigned = sigsInput.length === 1 && finalSignatureStatus === "Signed";
+  const initialStatus = isFullySigned ? "Processing" : "Submitted";
+
+  let submission;
+
+  if (draftId) {
+    // Clear old signatories if any existed on the draft (though usually it's empty)
+    await prisma.submissionSignatory.deleteMany({ where: { submissionId: draftId } });
+
+    submission = await prisma.formSubmission.update({
+      where: { id: draftId },
+      data: {
+        formResponses: updatedResponses,
+        signingType,
+        submittedById: req.user?.id ?? null,
+        status: initialStatus, // Use dynamic initial status
+        signatories: {
+          create: sigsInput.map((s) => ({
+            position:      s.position,
+            userName:      s.userName,
+            email:         s.email,
+            status:        s.position === 1 && finalSignatureStatus === "Signed" ? "Signed" : "Pending",
+            signatureData: s.position === 1 ? finalSignatureData : null,
+            signedAt:      s.position === 1 && finalSignatureStatus === "Signed" ? finalSignedAt : null,
+          })),
+        },
       },
-    },
-    include: { signatories: true },
-  });
+      include: { signatories: true },
+    });
+
+    // Also update any related prerequisite record to Submitted
+    await prisma.submissionPrerequisite.updateMany({
+      where: { prereqSubmissionId: draftId },
+      data: { status: "Submitted" }
+    });
+
+  } else {
+    submission = await prisma.formSubmission.create({
+      data: {
+        formName,
+        reference,
+        formResponses: updatedResponses,
+        signingType,
+        submittedById: req.user?.id ?? null,
+        templateId,
+        status: initialStatus, // Use dynamic initial status
+        signatories: {
+          create: sigsInput.map((s) => ({
+            position:      s.position,
+            userName:      s.userName,
+            email:         s.email,
+            status:        s.position === 1 && finalSignatureStatus === "Signed" ? "Signed" : "Pending",
+            signatureData: s.position === 1 ? finalSignatureData : null,
+            signedAt:      s.position === 1 && finalSignatureStatus === "Signed" ? finalSignedAt : null,
+          })),
+        },
+      },
+      include: { signatories: true },
+    });
+  }
 
   // ── Audit: record initial submission event ──
   prisma.formAuditTrail.create({
@@ -272,13 +344,194 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
       submissionId:  submission.id,
       formReference: submission.reference,
       prevStatus:    "",
-      newStatus:     "Submitted",
+      newStatus:     initialStatus,
       action:        "submitted",
       actorName:     req.user?.user_name ?? req.user?.email ?? null,
       actorEmail:    req.user?.email ?? null,
       note:          `Form: ${formName}`,
     },
   }).catch((e: any) => console.error("[audit] submit:", e));
+
+  // ── Background: generate + store the PDF if fully signed at submission ──
+  if (isFullySigned) {
+    checkAndUnblockPrerequisites(submission.id);
+    setImmediate(async () => {
+      try {
+        const pdfResult = await generateSubmissionPdf(submission.id);
+        if (!pdfResult) return;
+
+        const formFolder = submission.formName.replace(/[\\/:*?"<>|]/g, "").trim().toUpperCase();
+        const refFolder  = submission.reference?.replace(/[\\/:*?"<>|]/g, "").trim().toUpperCase() || submission.id.slice(-6).toUpperCase();
+        let storedPath = "";
+
+        if (isSharePointEnabled()) {
+          storedPath = await uploadToSharePoint(
+            pdfResult.buffer, pdfResult.filename, "application/pdf",
+            `uploads/${formFolder}/${refFolder}`
+          );
+        } else {
+          const uploadDir = process.env.UPLOAD_DIR ?? "C:\\Users\\USER\\uploads";
+          const targetDir = path.join(uploadDir, formFolder, refFolder);
+          await fs.mkdir(targetDir, { recursive: true });
+          const destPath = path.join(targetDir, pdfResult.filename);
+          await fs.writeFile(destPath, pdfResult.buffer);
+          storedPath = destPath;
+        }
+
+        if (storedPath) {
+          const created = await prisma.submissionDocument.create({
+            data: {
+              submissionId: submission.id,
+              fieldName:    "CompletedFormPDF",
+              originalName: pdfResult.filename,
+              filePath:     storedPath,
+              mimeType:     "application/pdf",
+              size:         pdfResult.buffer.length,
+            },
+          });
+
+          const resData = (submission.formResponses as Record<string, any>) || {};
+          resData["CompletedFormPDF"] = [
+            { isAttachment: true, name: pdfResult.filename, url: `/api/v1/file?docId=${created.id}` },
+          ];
+          await prisma.formSubmission.update({
+            where: { id: submission.id },
+            data:  { formResponses: resData },
+          });
+          console.info(`[pdf] Generated and stored: ${pdfResult.filename}`);
+        }
+      } catch (err) {
+        console.error("[pdf] Background generation failed:", err);
+      }
+    });
+  }
+
+  // ── Check for prerequisite fields ────────────────────────────────────────────
+  // A field is a prerequisite if its JSON config has { isPrerequisite: true }.
+  // The submitter fills in the email of the person who needs to complete the
+  // prerequisite form. We auto-create a draft submission for that email and
+  // block the main submission until all prerequisites are approved.
+  setImmediate(async () => {
+    try {
+      const templateWithFields = await prisma.formTemplate.findUnique({
+        where: { id: templateId },
+        select: { fields: true },
+      });
+      if (!templateWithFields) return;
+
+      const fields = templateWithFields.fields as any[];
+      const prereqFields = fields.filter(
+        (f: any) => f.isPrerequisite === true && f.targetFormTemplateId
+      );
+      if (prereqFields.length === 0) return;
+
+      // For each prerequisite field, create a draft submission + SubmissionPrerequisite record
+      let prereqCount = 0;
+      for (const field of prereqFields) {
+        const targetEmail = (formResponses[field.id] ?? formResponses[field.label] ?? "").trim();
+        if (!targetEmail) continue;
+
+        const targetTemplate = await prisma.formTemplate.findUnique({
+          where: { id: field.targetFormTemplateId },
+          select: { id: true, name: true, fields: true },
+        });
+        if (!targetTemplate) continue;
+
+        // Generate a reference for the draft prerequisite submission (removed -PRE)
+        const acronym = targetTemplate.name.split(" ").map((w: string) => w[0]).join("").toUpperCase();
+        const latestPrereq = await prisma.formSubmission.findFirst({
+          where: { templateId: targetTemplate.id },
+          orderBy: { createdAt: 'desc' },
+          select: { reference: true }
+        });
+
+        let nextNumber = 1;
+        if (latestPrereq && latestPrereq.reference) {
+          const match = latestPrereq.reference.match(/\d+$/);
+          if (match) {
+            nextNumber = parseInt(match[0], 10) + 1;
+          } else {
+            const count = await prisma.formSubmission.count({ where: { templateId: targetTemplate.id } });
+            nextNumber = count + 1;
+          }
+        }
+        const prereqRef = `${acronym}${nextNumber}`;
+
+        // Auto-populate form reference if a field exists
+        const targetFields: any[] = typeof targetTemplate.fields === "string" 
+          ? JSON.parse(targetTemplate.fields) 
+          : (targetTemplate.fields || []);
+          
+        const prefilledResponses: Record<string, any> = {};
+        const refField = targetFields.find((f: any) => 
+          f.type !== "section_header" && f.type !== "instructions" && f.label.toLowerCase().includes("form reference")
+        );
+        if (refField) {
+          prefilledResponses[refField.id] = submission.reference;
+        }
+
+        const prereqSub = await prisma.formSubmission.create({
+          data: {
+            formName: targetTemplate.name,
+            reference: prereqRef,
+            formResponses: prefilledResponses,
+            signingType: "sequential",
+            status: "Draft",
+            templateId: targetTemplate.id,
+            submittedById: null,
+          },
+        });
+
+        await prisma.submissionPrerequisite.create({
+          data: {
+            mainSubmissionId: submission.id,
+            prereqSubmissionId: prereqSub.id,
+            targetFormId: targetTemplate.id,
+            targetEmail,
+            status: "Pending",
+          },
+        });
+        prereqCount++;
+
+        // Notify the target email
+        const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
+        const fillUrl = `${appUrl}/dashboard/forms/draft/${prereqSub.id}`;
+        mailer.sendMail({
+          from: `Paperless <${process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
+          to: targetEmail,
+          subject: `Action Required: Please complete the "${targetTemplate.name}" form`,
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
+              <h2 style="color: #B50938; margin-bottom: 4px;">Paperless by FINCA</h2>
+              <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
+              <hr style="border-color: #e5e7eb; margin: 20px 0;" />
+              <p style="font-size: 15px; color: #111827;">Hello,</p>
+              <p style="font-size: 14px; color: #374151;">
+                You have been requested to complete a prerequisite form before a submission can proceed for approval.
+              </p>
+              <div style="background: #f9fafb; border-left: 4px solid #B50938; border-radius: 4px; padding: 16px; margin: 16px 0;">
+                <p style="margin: 0; font-weight: 600; color: #111827;">${targetTemplate.name}</p>
+                <p style="margin: 4px 0 0; font-size: 13px; color: #6b7280;">Reference: ${prereqRef}</p>
+              </div>
+              <p style="font-size: 14px; color: #374151;">Please click the button below to open and complete your form. You may be asked to log in if you are a registered user.</p>
+              <a href="${fillUrl}" style="display: inline-block; background: #B50938; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; margin-top: 8px;">Open & Complete Form</a>
+              <p style="font-size: 12px; color: #9ca3af; margin-top: 24px;">If you believe this was sent in error, please contact your administrator.</p>
+            </div>
+          `,
+        }).catch((e: any) => console.error("[prereq email]", e));
+      }
+
+      // Block the main submission if any prerequisites were created
+      if (prereqCount > 0) {
+        await prisma.formSubmission.update({
+          where: { id: submission.id },
+          data: { status: "Blocked - Awaiting Prerequisites" },
+        });
+      }
+    } catch (err) {
+      console.error("[prerequisites] Failed to set up prerequisite checks:", err);
+    }
+  });
 
 
   // ── Create SubmissionDocument records and patch formResponses URLs ─────────

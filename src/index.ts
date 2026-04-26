@@ -33,6 +33,7 @@ import historyRouter from "./routes/history";
 import auditRouter from "./routes/audit";
 import identityRouter from "./routes/identity";
 import mobileSubmitRouter from "./routes/mobile_submit";
+import prerequisitesRouter from "./routes/prerequisites";
 
 const app = express();
 const PORT = process.env.PORT ?? 4000;
@@ -94,6 +95,7 @@ v1.use("/history", historyRouter);
 v1.use("/audit", auditRouter);
 v1.use("/identity", identityRouter);
 v1.use("/mobile_submit", mobileSubmitRouter);
+v1.use("/prerequisites", prerequisitesRouter);
 
 
 app.use("/api/v1", v1);
