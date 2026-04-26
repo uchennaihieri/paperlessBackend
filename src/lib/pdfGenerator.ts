@@ -161,9 +161,15 @@ export async function generateSubmissionPdf(id: string): Promise<{ buffer: Buffe
 
           let browser: Awaited<ReturnType<typeof puppeteer.launch>> | undefined;
           try {
+            // Use bundled Chromium with Linux-friendly args
+            browser = await puppeteer.launch({ 
+              headless: true,
+              args: ['--no-sandbox', '--disable-setuid-sandbox']
+            });
+          } catch (e) {
+            console.error("Primary launch failed, trying fallback:", e);
+            // Fallback for local Windows testing if bundled Chromium is missing
             browser = await puppeteer.launch({ headless: true, channel: "chrome" });
-          } catch {
-            browser = await puppeteer.launch({ headless: true, channel: "msedge" as any });
           }
 
           const pg = await browser.newPage();
@@ -327,9 +333,15 @@ export async function generateSubmissionPdf(id: string): Promise<{ buffer: Buffe
 
   let browser: Awaited<ReturnType<typeof puppeteer.launch>> | undefined;
   try {
+    // Use bundled Chromium with Linux-friendly args
+    browser = await puppeteer.launch({ 
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
+  } catch (e) {
+    console.error("Primary launch failed, trying fallback:", e);
+    // Fallback for local Windows testing if bundled Chromium is missing
     browser = await puppeteer.launch({ headless: true, channel: "chrome" });
-  } catch {
-    browser = await puppeteer.launch({ headless: true, channel: "msedge" as any });
   }
 
   const page = await browser.newPage();
