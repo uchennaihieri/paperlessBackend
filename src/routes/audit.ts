@@ -6,7 +6,7 @@ const router = Router();
 router.use(authenticate as any);
 
 // ── GET /api/v1/audit ─────────────────────────────────────────────────────────
-// All audit records, newest first.
+// Latest audit record per form submission, newest first overall.
 // Query params (all optional, combinable):
 //   ?reference=PCL1          → filter by formReference (partial, case-insensitive)
 //   ?email=jane@finca.ng     → filter by actorEmail (exact, case-insensitive)
@@ -32,21 +32,41 @@ router.get("/", async (req, res: Response) => {
     where.newStatus = { equals: status, mode: "insensitive" };
   }
   if (date) {
-    // Match any record created during the given calendar day (UTC)
     const from = new Date(`${date}T00:00:00.000Z`);
     const to   = new Date(`${date}T23:59:59.999Z`);
     where.createdAt = { gte: from, lte: to };
   }
 
-  const [total, records] = await Promise.all([
-    prisma.formAuditTrail.count({ where }),
-    prisma.formAuditTrail.findMany({
-      where,
+  // 1. Group by submissionId to get the latest createdAt for each form
+  const latestGroups = await prisma.formAuditTrail.groupBy({
+    by: ['submissionId'],
+    _max: { createdAt: true },
+    where,
+    orderBy: { _max: { createdAt: 'desc' } },
+    skip,
+    take,
+  });
+
+  // 2. Fetch the actual full records using the grouping results
+  let records: any[] = [];
+  if (latestGroups.length > 0) {
+    const orConditions = latestGroups.map(g => ({
+      submissionId: g.submissionId,
+      createdAt: g._max.createdAt!
+    }));
+
+    records = await prisma.formAuditTrail.findMany({
+      where: { OR: orConditions },
       orderBy: { createdAt: "desc" },
-      take,
-      skip,
-    }),
-  ]);
+    });
+  }
+
+  // 3. Count total unique submissions for pagination metadata
+  const totalGroups = await prisma.formAuditTrail.groupBy({
+    by: ['submissionId'],
+    where
+  });
+  const total = totalGroups.length;
 
   res.json({
     success: true,
@@ -61,7 +81,7 @@ router.get("/", async (req, res: Response) => {
 });
 
 // ── GET /api/v1/audit/:submissionId ──────────────────────────────────────────
-// Full trail for one submission, newest first.
+// Full trail for one submission, from 1st activity to the latest (oldest first).
 router.get("/:submissionId", async (req, res: Response) => {
   const submission = await prisma.formSubmission.findUnique({
     where: { id: req.params.submissionId },
@@ -75,7 +95,7 @@ router.get("/:submissionId", async (req, res: Response) => {
 
   const trail = await prisma.formAuditTrail.findMany({
     where: { submissionId: req.params.submissionId },
-    orderBy: { createdAt: "desc" },
+    orderBy: { createdAt: "asc" }, // 1st activity to latest
   });
 
   res.json({ success: true, data: trail });
