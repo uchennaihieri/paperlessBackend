@@ -47,6 +47,7 @@ model FormTemplate {
   updatedAt   DateTime @updatedAt
   submissions FormSubmission[]
   prerequisiteFor SubmissionPrerequisite[]
+  formAccess  FormAccess[]
 }
 
 // Main form submission record
@@ -236,4 +237,17 @@ model IdentityVerificationLog {
 
   @@index([idType, idNumber])
   @@map("identity_verification_logs")
+}
+
+// Join table: which users have access to which form templates
+model FormAccess {
+  id         String       @id @default(cuid())
+  templateId String
+  userEmail  String
+  template   FormTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  grantedAt  DateTime     @default(now())
+  grantedBy  String       // Email of the administrator who granted access
+
+  @@unique([templateId, userEmail])
+  @@map("form_access")
 }

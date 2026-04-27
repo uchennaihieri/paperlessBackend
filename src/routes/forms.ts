@@ -8,8 +8,27 @@ const router = Router();
 router.use(authenticate as any);
 
 // ── GET /api/v1/forms ─────────────────────────────────────────────────────────
-router.get("/", async (_req, res: Response) => {
-  const templates = await prisma.formTemplate.findMany({ orderBy: { createdAt: "asc" } });
+router.get("/", async (req: AuthRequest, res: Response) => {
+  const userRole = (req.user?.user_role ?? "").toLowerCase();
+  const isAdmin = userRole === "admin" || userRole === "superadmin";
+  const email = req.user?.email?.toLowerCase() ?? "";
+
+  let templates;
+  if (isAdmin) {
+    templates = await prisma.formTemplate.findMany({ orderBy: { createdAt: "asc" } });
+  } else {
+    // Only return forms the user has been explicitly assigned to
+    const accessRecords = await prisma.formAccess.findMany({
+      where: { userEmail: email },
+      select: { templateId: true }
+    });
+    const templateIds = accessRecords.map(a => a.templateId);
+    templates = await prisma.formTemplate.findMany({
+      where: { id: { in: templateIds } },
+      orderBy: { createdAt: "asc" }
+    });
+  }
+
   res.json({ success: true, data: templates });
 });
 
@@ -70,12 +89,33 @@ router.get("/dynamic-options", async (req, res: Response) => {
 });
 
 // ── GET /api/v1/forms/:id ──────────────────────────────────────────────────────
-router.get("/:id", async (req, res: Response) => {
+router.get("/:id", async (req: AuthRequest, res: Response) => {
   const template = await prisma.formTemplate.findUnique({ where: { id: req.params.id } });
   if (!template) {
     res.status(404).json({ success: false, error: "Form template not found" });
     return;
   }
+
+  const userRole = (req.user?.user_role ?? "").toLowerCase();
+  const isAdmin = userRole === "admin" || userRole === "superadmin";
+  const email = req.user?.email?.toLowerCase() ?? "";
+
+  if (!isAdmin) {
+    // Check if the user has access to this specific form
+    const access = await prisma.formAccess.findUnique({
+      where: {
+        templateId_userEmail: {
+          templateId: req.params.id,
+          userEmail: email,
+        }
+      }
+    });
+    if (!access) {
+      res.status(403).json({ success: false, error: "You do not have access to this form." });
+      return;
+    }
+  }
+
   res.json({ success: true, data: template });
 });
 
