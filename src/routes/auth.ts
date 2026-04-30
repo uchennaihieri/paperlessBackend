@@ -14,7 +14,7 @@ const router = Router();
 // Also handles device-ID check: if deviceId is supplied and not approved, blocks login.
 // ─────────────────────────────────────────────────────────────────────────────
 router.post("/login", async (req: Request, res: Response) => {
-  const { employeeId, password, deviceId, deviceName } = req.body;
+  const { employeeId, password } = req.body;
 
   if (!employeeId || !password) {
     res.status(400).json({ success: false, error: "Employee ID and password are required." });
@@ -34,57 +34,20 @@ router.post("/login", async (req: Request, res: Response) => {
     return;
   }
 
-  // Verify password
-  // If no passwordHash exists yet (legacy account), let them through and force a reset.
-  // This avoids locking out users created before the password system was introduced.
-  let skipPasswordCheck = false;
+  // Account must have a password set by an administrator before it can be used.
   if (!user.passwordHash) {
-    skipPasswordCheck = true;
-  } else {
-    const passwordOk = await bcrypt.compare(password, user.passwordHash);
-    if (!passwordOk) {
-      res.status(401).json({ success: false, error: "Invalid credentials." });
-      return;
-    }
+    res.status(401).json({
+      success: false,
+      error: "Your account password has not been configured. Please contact your administrator.",
+    });
+    return;
   }
 
-  // ── Device check ──────────────────────────────────────────────────────────
-  if (deviceId) {
-    const existing = await prisma.deviceRegistration.findUnique({
-      where: { userId_deviceId: { userId: user.id, deviceId } },
-    });
-
-    if (!existing) {
-      // Register as Pending
-      await prisma.deviceRegistration.create({
-        data: { userId: user.id, deviceId, deviceName: deviceName ?? null },
-      });
-      res.status(403).json({
-        success: false,
-        code: "DEVICE_PENDING",
-        error: "This device has been submitted for approval. You will be able to log in once an administrator approves it.",
-      });
-      return;
-    }
-
-    if (existing.status === "Pending") {
-      res.status(403).json({
-        success: false,
-        code: "DEVICE_PENDING",
-        error: "Your device is awaiting administrator approval.",
-      });
-      return;
-    }
-
-    if (existing.status === "Rejected") {
-      res.status(403).json({
-        success: false,
-        code: "DEVICE_REJECTED",
-        error: "This device has been rejected by an administrator. Contact your administrator.",
-      });
-      return;
-    }
-    // status === "Approved" → continue
+  // Verify password — wrong password always fails, no bypass.
+  const passwordOk = await bcrypt.compare(password, user.passwordHash);
+  if (!passwordOk) {
+    res.status(401).json({ success: false, error: "Invalid credentials." });
+    return;
   }
 
   // ── Send OTP ──────────────────────────────────────────────────────────────
@@ -124,9 +87,10 @@ router.post("/login", async (req: Request, res: Response) => {
     success: true,
     message: "OTP sent to your registered email.",
     email,
-    mustResetPassword: skipPasswordCheck || user.mustResetPassword,
+    mustResetPassword: user.mustResetPassword,
   });
 });
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STEP 2 – POST /api/v1/auth/verify-otp
@@ -217,13 +181,14 @@ router.post("/verify-otp", async (req: Request, res: Response) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STEP 3 – POST /api/v1/auth/reset-password
-// Required on first login. Authenticated route.
+// Called after first login or when admin forces a reset. User is already
+// authenticated via OTP, so no need to re-verify the old password here.
 // ─────────────────────────────────────────────────────────────────────────────
 router.post("/reset-password", authenticate as any, async (req: AuthRequest, res: Response) => {
-  const { currentPassword, newPassword } = req.body;
+  const { newPassword } = req.body;
 
-  if (!currentPassword || !newPassword) {
-    res.status(400).json({ success: false, error: "currentPassword and newPassword are required." });
+  if (!newPassword) {
+    res.status(400).json({ success: false, error: "newPassword is required." });
     return;
   }
   if (newPassword.length < 8) {
@@ -237,16 +202,6 @@ router.post("/reset-password", authenticate as any, async (req: AuthRequest, res
     return;
   }
 
-  // Legacy accounts (no passwordHash yet) arrived here via OTP — skip current-password check.
-  // Any account that already has a password must verify it before changing.
-  if (user.passwordHash) {
-    const match = await bcrypt.compare(currentPassword, user.passwordHash);
-    if (!match) {
-      res.status(400).json({ success: false, error: "Current password is incorrect." });
-      return;
-    }
-  }
-
   const hash = await bcrypt.hash(newPassword, 12);
   await prisma.user.update({
     where: { id: user.id },
@@ -256,24 +211,52 @@ router.post("/reset-password", authenticate as any, async (req: AuthRequest, res
   res.json({ success: true, message: "Password updated successfully." });
 });
 
+
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/v1/auth/set-password  (admin only — sets default password for a user)
+// Accepts employeeId (preferred) or userId.
+// Uses updateMany so ALL role rows for the same employee get the hash.
 // ─────────────────────────────────────────────────────────────────────────────
 router.post("/set-password", authenticate as any, requireAdmin as any, async (req: AuthRequest, res: Response) => {
-  const { userId, password } = req.body;
-  if (!userId || !password) {
-    res.status(400).json({ success: false, error: "userId and password are required." });
+  const { employeeId, userId, password } = req.body;
+
+  if ((!employeeId && !userId) || !password) {
+    res.status(400).json({ success: false, error: "employeeId (or userId) and password are required." });
+    return;
+  }
+  if (password.length < 6) {
+    res.status(400).json({ success: false, error: "Password must be at least 6 characters." });
     return;
   }
 
   const hash = await bcrypt.hash(password, 12);
-  await prisma.user.update({
-    where: { id: Number(userId) },
-    data: { passwordHash: hash, mustResetPassword: true, passwordChangedAt: new Date() },
-  });
 
-  res.json({ success: true, message: "Default password set. User must reset on first login." });
+  let updatedCount: number;
+
+  if (employeeId) {
+    // Update ALL rows matching this employee_id (handles multi-role users)
+    const result = await prisma.user.updateMany({
+      where: { employee_id: { equals: employeeId.trim(), mode: "insensitive" } },
+      data: { passwordHash: hash, mustResetPassword: true, passwordChangedAt: new Date() },
+    });
+    updatedCount = result.count;
+  } else {
+    // Fallback: single row by numeric userId
+    await prisma.user.update({
+      where: { id: Number(userId) },
+      data: { passwordHash: hash, mustResetPassword: true, passwordChangedAt: new Date() },
+    });
+    updatedCount = 1;
+  }
+
+  if (updatedCount === 0) {
+    res.status(404).json({ success: false, error: "No user found with that Employee ID." });
+    return;
+  }
+
+  res.json({ success: true, message: `Password set for ${updatedCount} role row(s). User must reset on first login.` });
 });
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Device Management (admin)
