@@ -100,4 +100,19 @@ router.delete("/:id", async (req, res: Response) => {
   res.json({ success: true });
 });
 
+// ── GET /api/v1/teams/user-by-employee-id/:empId ────────────────────────────
+// Resolve a user's DB id from their employee_id (used after creation to set password)
+router.get("/user-by-employee-id/:empId", async (req, res: Response) => {
+  const user = await prisma.user.findFirst({
+    where: { employee_id: { equals: req.params.empId, mode: "insensitive" } },
+    select: { id: true, user_name: true, finca_email: true, employee_id: true },
+    orderBy: { id: "desc" }, // take most recently created if duplicates
+  });
+  if (!user) {
+    res.status(404).json({ success: false, error: "User not found." });
+    return;
+  }
+  res.json({ success: true, data: user });
+});
+
 export default router;

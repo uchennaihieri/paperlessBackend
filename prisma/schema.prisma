@@ -23,9 +23,15 @@ model User {
   created_by      String?   @db.VarChar(50)
   status          String?   @db.VarChar(20)
 
+  // Auth fields
+  passwordHash      String?   // bcrypt hash of the user's password
+  mustResetPassword Boolean   @default(true)  // true on first login
+  passwordChangedAt DateTime? // set on every password change; JWTs issued before this are rejected
+
   // System added fields
   signature        String?
   submissions      FormSubmission[]
+  devices          DeviceRegistration[]
 
   @@map("users")
 }
@@ -276,4 +282,20 @@ model JournalEntry {
   @@index([committed])
   @@index([batchGroupId])
   @@map("journal_entries")
+}
+
+// Device/system identifier registration — admin must approve before user can log in
+model DeviceRegistration {
+  id           String   @id @default(cuid())
+  userId       Int
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceId     String   // Client-generated unique identifier (UUID)
+  deviceName   String?  // e.g. "Chrome on Windows 11" or "iPhone 14"
+  status       String   @default("Pending") // "Pending" | "Approved" | "Rejected"
+  approvedBy   String?  // Email of admin who approved/rejected
+  registeredAt DateTime @default(now())
+  approvedAt   DateTime?
+
+  @@unique([userId, deviceId])
+  @@map("device_registrations")
 }

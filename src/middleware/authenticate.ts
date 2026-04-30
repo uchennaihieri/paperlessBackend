@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
+import prisma from "../lib/prisma";
 
 export interface AuthRequest extends Request {
   user?: {
@@ -14,13 +15,14 @@ export interface AuthRequest extends Request {
 
 /**
  * Verifies the Bearer JWT and attaches the decoded payload to req.user.
- * The JWT is issued by the /api/v1/mobile/auth/verify-otp endpoint.
+ * Also checks that the token was NOT issued before the user's last password change.
+ * If the admin resets a user's password, any existing tokens are immediately invalidated.
  */
-export function authenticate(
+export async function authenticate(
   req: AuthRequest,
   res: Response,
   next: NextFunction
-): void {
+): Promise<void> {
   const header = req.headers.authorization;
   if (!header?.startsWith("Bearer ")) {
     res.status(401).json({ success: false, error: "Missing or invalid Authorization header" });
@@ -31,6 +33,23 @@ export function authenticate(
   try {
     const secret = process.env.JWT_SECRET ?? "supersecretjwtkey";
     const payload = jwt.verify(token, secret) as any;
+
+    // ── Password-change invalidation ──────────────────────────────────────────
+    // If the user's password was changed after this token was issued, reject it.
+    if (payload.id) {
+      const user = await prisma.user.findUnique({
+        where: { id: Number(payload.id) },
+        select: { passwordChangedAt: true },
+      });
+      if (user?.passwordChangedAt) {
+        const issuedAt = payload.iat ? new Date(payload.iat * 1000) : null;
+        if (issuedAt && user.passwordChangedAt > issuedAt) {
+          res.status(401).json({ success: false, error: "Session expired due to a password change. Please log in again.", code: "PASSWORD_CHANGED" });
+          return;
+        }
+      }
+    }
+
     req.user = payload;
     next();
   } catch {
