@@ -36,6 +36,7 @@ model FormTemplate {
   description String?
   mobileEnabled         Boolean @default(false)
   accountServicesEnabled Boolean @default(false)
+  isInternal            Boolean @default(false)
   fields      Json
   htmlTemplate String? @db.Text // Store the raw HTML string template
   formOwner   String?  // The branch that owns/creates this form
@@ -59,6 +60,7 @@ model FormSubmission {
   formResponses  Json                // The actual field answers
   signingType    String              @default("sequential") // sequential | parallel
   treatedBy      String?             // Name of the officer who assigned to self and treated
+  treaterEmail   String?             // Email of the officer who assigned to self and treated
   approvedBy     String?             // Display name of final approver, or "None"
   approverEmail  String?             // Email used to route to approver's queue
   submittedById  Int?
@@ -250,4 +252,28 @@ model FormAccess {
 
   @@unique([templateId, userEmail])
   @@map("form_access")
+}
+
+// Global double-entry journal ledger
+model JournalEntry {
+  id           String   @id @default(cuid())
+  entryId      String   @unique // "jv1", "jv2"... globally sequential
+  committed    Boolean  @default(false) // false = pending (not in global view), true = approved
+  sessionRef   String   // Form reference number (e.g. "PCL1") — no FK, plain string
+  formName     String   // Copied from form for display/search
+  type         String   // "debit" | "credit"
+  accountCode  String
+  accountName  String
+  batchNumber  String?
+  branch       String?
+  description  String
+  amount       Decimal  @db.Decimal(18, 2)
+  createdBy    String   // Email of officer
+  date         DateTime @default(now())
+  batchGroupId String?  // UUID shared across linked sessions (cross-form balancing)
+
+  @@index([sessionRef])
+  @@index([committed])
+  @@index([batchGroupId])
+  @@map("journal_entries")
 }

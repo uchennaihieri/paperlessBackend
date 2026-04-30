@@ -213,7 +213,7 @@ router.post("/:id/assign-self", async (req: AuthRequest, res: Response) => {
 
   await prisma.formSubmission.update({
     where: { id: req.params.id },
-    data: { status: newStatus, treatedBy: userName },
+    data: { status: newStatus, treatedBy: userName, treaterEmail: email },
   });
 
   await logAudit({
@@ -253,6 +253,26 @@ router.post("/:id/complete", async (req: AuthRequest, res: Response) => {
     where: { id: req.params.id },
     select: { status: true, reference: true },
   });
+
+  // Block if there are uncommitted journal entries for this form (or its batch)
+  if (current?.reference) {
+    const batchSample = await prisma.journalEntry.findFirst({
+      where: { sessionRef: current.reference, batchGroupId: { not: null } },
+      select: { batchGroupId: true },
+    });
+    const uncommittedWhere = batchSample?.batchGroupId
+      ? { batchGroupId: batchSample.batchGroupId, committed: false }
+      : { sessionRef: current.reference, committed: false };
+
+    const uncommitted = await prisma.journalEntry.count({ where: uncommittedWhere });
+    if (uncommitted > 0) {
+      res.status(400).json({
+        success: false,
+        error: `There ${uncommitted === 1 ? "is" : "are"} ${uncommitted} uncommitted journal entr${uncommitted === 1 ? "y" : "ies"} for this form${batchSample ? " (batch)" : ""}. Please commit all journal entries before submitting to the final approver.`,
+      });
+      return;
+    }
+  }
   const treaterUser = await prisma.user.findFirst({
     where: { finca_email: { equals: email!, mode: "insensitive" } },
     select: { user_name: true },
@@ -363,6 +383,14 @@ router.post("/:id/approve", async (req: AuthRequest, res: Response) => {
     actorEmail:    email,
   });
 
+  // Commit all pending journal entries for this submission's reference
+  if (currentForApprove?.reference) {
+    await prisma.journalEntry.updateMany({
+      where: { sessionRef: currentForApprove.reference, committed: false },
+      data:  { committed: true },
+    });
+  }
+
   checkAndUnblockPrerequisites(req.params.id);
 
   res.json({ success: true });
@@ -409,6 +437,14 @@ router.post("/:id/decline-final", async (req: AuthRequest, res: Response) => {
     actorEmail:    email,
     note:          "Final approver declined — returned to Processing",
   });
+
+  // Uncommit journal entries — approver returned the form, entries revert to pending
+  if (sub.reference) {
+    await prisma.journalEntry.updateMany({
+      where: { sessionRef: sub.reference },
+      data:  { committed: false },
+    });
+  }
 
   res.json({ success: true });
 });
@@ -597,6 +633,15 @@ router.post("/:id/decline", async (req: AuthRequest, res: Response) => {
     actorEmail:    email,
     note:          reason?.trim() || null,
   });
+
+  // Uncommit all journal entries — submission rejected, removed from global ledger
+  // but entries remain so the officer can review/edit and resubmit
+  if (currentForDecline?.reference) {
+    await prisma.journalEntry.updateMany({
+      where: { sessionRef: currentForDecline.reference },
+      data:  { committed: false },
+    });
+  }
 
   res.json({ success: true });
 });

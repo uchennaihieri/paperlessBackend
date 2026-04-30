@@ -24,7 +24,7 @@ router.get("/", async (req: AuthRequest, res: Response) => {
     });
     const templateIds = accessRecords.map(a => a.templateId);
     templates = await prisma.formTemplate.findMany({
-      where: { id: { in: templateIds } },
+      where: { id: { in: templateIds }, isInternal: false },
       orderBy: { createdAt: "asc" }
     });
   }
@@ -121,7 +121,7 @@ router.get("/:id", async (req: AuthRequest, res: Response) => {
 
 // ── POST /api/v1/forms ─────────────────────────────────────────────────────────
 router.post("/", requireAdmin as any, async (req: AuthRequest, res: Response) => {
-  const { name, description, fields, formOwner, formTreater, htmlTemplate, pdfGeneratorType, pdfTemplateId, mobileEnabled, accountServicesEnabled } = req.body;
+  const { name, description, fields, formOwner, formTreater, htmlTemplate, pdfGeneratorType, pdfTemplateId, mobileEnabled, accountServicesEnabled, isInternal } = req.body;
   try {
     const template = await prisma.formTemplate.create({
       data: {
@@ -129,6 +129,7 @@ router.post("/", requireAdmin as any, async (req: AuthRequest, res: Response) =>
         description,
         mobileEnabled: mobileEnabled ?? false,
         accountServicesEnabled: accountServicesEnabled ?? false,
+        isInternal: isInternal ?? false,
         fields,
         formOwner: formOwner ?? null,
         formTreater: formTreater ?? null,

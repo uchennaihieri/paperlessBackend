@@ -31,6 +31,9 @@ router.use(authenticate as any);
 // Returns all submissions (admin / action-center view)
 router.get("/", async (_req, res: Response) => {
   const submissions = await prisma.formSubmission.findMany({
+    where: {
+      status: { not: "Internal Attachment" }
+    },
     orderBy: { createdAt: "desc" },
     include: {
       signatories: { orderBy: { position: "asc" } },
@@ -45,7 +48,10 @@ router.get("/", async (_req, res: Response) => {
 router.get("/my", async (req: AuthRequest, res: Response) => {
   if (!req.user?.id) { res.status(401).json({ success: false, error: "Unauthenticated" }); return; }
   const submissions = await prisma.formSubmission.findMany({
-    where: { submittedById: req.user.id },
+    where: { 
+      submittedById: req.user.id,
+      status: { not: "Internal Attachment" }
+    },
     orderBy: { createdAt: "desc" },
     include: { 
       signatories: { orderBy: { position: "asc" } },
@@ -211,6 +217,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
   //   uploads/{FORM NAME}/{REFERENCE}/{originalFilename}
   const uploadedFiles = (req.files as Express.Multer.File[]) ?? [];
   const updatedResponses: Record<string, any> = { ...formResponses };
+  
   const docCreates: Array<{
     fieldName: string;
     originalName: string;
@@ -218,6 +225,95 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
     mimeType: string;
     size: number;
   }> = [];
+
+  // ── Handle Internal Forms (Custom Forms as Attachments) ─────────────────────
+  const formFolder = sanitiseFolder(formName);
+  const refFolder  = sanitiseFolder(reference);
+  const internalFormTasks: Array<{ fieldName: string, templateId: string, templateName: string, data: any }> = [];
+  
+  for (const [key, value] of Object.entries(updatedResponses)) {
+    if (value && typeof value === "object" && value.type === "internal_form") {
+      internalFormTasks.push({
+        fieldName: key,
+        templateId: value.templateId,
+        templateName: value.templateName || "Internal Form",
+        data: value.data
+      });
+      // Clear out the raw payload so we can replace it with the generated PDF attachment metadata later
+      delete updatedResponses[key];
+    }
+  }
+
+  const internalAttachments: Record<string, Array<{ isAttachment: true; name: string; url: string }>> = {};
+
+  for (const task of internalFormTasks) {
+    // 1. Create a Ghost Submission (auto-signed by the logged in user)
+    const ghostSub = await prisma.formSubmission.create({
+      data: {
+        formName: task.templateName,
+        status: "Internal Attachment",
+        formResponses: task.data,
+        signingType: "sequential",
+        templateId: task.templateId,
+        submittedById: req.user?.id ?? null,
+        signatories: {
+          create: [{
+            position: 1,
+            userName: req.user?.user_name || req.user?.email || "System User",
+            email: req.user?.email || "system@internal",
+            status: "Signed",
+            signedAt: new Date(),
+            signatureData: finalSignatureData,
+          }]
+        }
+      }
+    });
+
+    // 2. Generate PDF
+    const pdfResult = await generateSubmissionPdf(ghostSub.id);
+    if (!pdfResult) continue;
+
+    const originalFilename = pdfResult.filename;
+    let storedPath: string;
+
+    if (isSharePointEnabled()) {
+      storedPath = await uploadToSharePoint(
+        pdfResult.buffer,
+        originalFilename,
+        "application/pdf",
+        `uploads/${formFolder}/${refFolder}`
+      );
+    } else {
+      const uploadDir = process.env.UPLOAD_DIR ?? "C:\\Users\\USER\\uploads";
+      const targetDir = path.join(uploadDir, formFolder, refFolder);
+      await fs.mkdir(targetDir, { recursive: true });
+      storedPath = path.join(targetDir, originalFilename);
+      await fs.writeFile(storedPath, pdfResult.buffer);
+    }
+
+    docCreates.push({
+      fieldName: task.fieldName,
+      originalName: originalFilename,
+      filePath: storedPath,
+      mimeType: "application/pdf",
+      size: pdfResult.buffer.length,
+    });
+
+    if (!internalAttachments[task.fieldName]) {
+      internalAttachments[task.fieldName] = [];
+    }
+    internalAttachments[task.fieldName].push({ isAttachment: true, name: originalFilename, url: "__pending__" });
+  }
+
+  // Merge internal attachments back into updatedResponses
+  for (const [fieldName, attachments] of Object.entries(internalAttachments)) {
+    // Append to existing array if file upload and custom form were both used on the same field
+    if (Array.isArray(updatedResponses[fieldName])) {
+      updatedResponses[fieldName] = updatedResponses[fieldName].concat(attachments);
+    } else {
+      updatedResponses[fieldName] = attachments;
+    }
+  }
 
   if (uploadedFiles.length > 0) {
     const formFolder = sanitiseFolder(formName);   // e.g. "PETTY CASH LIVE"
