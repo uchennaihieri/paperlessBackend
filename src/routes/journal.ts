@@ -162,7 +162,7 @@ router.get("/unbalanced", async (req: AuthRequest, res: Response) => {
 
   // Sort: overages first, then by amount desc
   result.sort((a, b) => {
-    if (a.direction !== b.direction) return a.direction === "Overage" ? -1 : 1;
+    if (a.direction !== b.direction) return a.direction === "Dr Overage" ? -1 : 1;
     return parseFloat(b.amount) - parseFloat(a.amount);
   });
 
