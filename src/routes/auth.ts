@@ -254,6 +254,38 @@ router.post("/set-password", authenticate as any, requireAdmin as any, async (re
     return;
   }
 
+  // Fetch the user's email to send the notification
+  const targetUser = await prisma.user.findFirst({
+    where: employeeId
+      ? { employee_id: { equals: employeeId.trim(), mode: "insensitive" } }
+      : { id: Number(userId) },
+    select: { finca_email: true, user_name: true, employee_id: true },
+  });
+
+  if (targetUser?.finca_email) {
+    const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
+    mailer.sendMail({
+      from: `Paperless <${process.env.SMTP_USER}>`,
+      to: targetUser.finca_email,
+      subject: "Paperless – Your Password Has Been Reset",
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
+          <h2 style="color: #B50938; margin-bottom: 4px;">Paperless by FINCA</h2>
+          <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
+          <hr style="border-color: #e5e7eb; margin: 20px 0;" />
+          <p style="font-size: 15px; color: #111827;">Hi <strong>${targetUser.user_name ?? "User"}</strong>,</p>
+          <p style="font-size: 14px; color: #374151;">An administrator has reset your Paperless account password. Use the credentials below to log in. You will be required to set a new password on your next login.</p>
+          <div style="background: #f9fafb; border-left: 4px solid #B50938; border-radius: 4px; padding: 16px; margin: 16px 0;">
+            <p style="margin: 0 0 8px; font-size: 14px; color: #111827;"><strong>Login URL:</strong> <a href="${appUrl}" style="color: #B50938;">${appUrl}</a></p>
+            <p style="margin: 0 0 8px; font-size: 14px; color: #111827;"><strong>Employee ID:</strong> ${targetUser.employee_id ?? employeeId ?? userId}</p>
+            <p style="margin: 0; font-size: 14px; color: #111827;"><strong>Temporary Password:</strong> ${password}</p>
+          </div>
+          <p style="font-size: 13px; color: #6b7280;">For your security, please change your password immediately after logging in. Do not share these credentials with anyone.</p>
+        </div>
+      `,
+    }).catch((e: any) => console.error("[set-password email]", e));
+  }
+
   res.json({ success: true, message: `Password set for ${updatedCount} role row(s). User must reset on first login.` });
 });
 
