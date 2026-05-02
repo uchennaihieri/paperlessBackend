@@ -151,7 +151,7 @@ router.post("/", requireAdmin as any, async (req: AuthRequest, res: Response) =>
 
 // ── PATCH /api/v1/forms/:id ───────────────────────────────────────────────────
 router.patch("/:id", requireAdmin as any, async (req: AuthRequest, res: Response) => {
-  const { name, description, fields, formOwner, formTreater, htmlTemplate, pdfGeneratorType, pdfTemplateId, mobileEnabled, accountServicesEnabled } = req.body;
+  const { name, description, fields, formOwner, formTreater, htmlTemplate, pdfGeneratorType, pdfTemplateId, mobileEnabled, accountServicesEnabled, isInternal } = req.body;
   try {
     const template = await prisma.formTemplate.update({
       where: { id: req.params.id },
@@ -160,6 +160,7 @@ router.patch("/:id", requireAdmin as any, async (req: AuthRequest, res: Response
         description,
         mobileEnabled: mobileEnabled ?? false,
         accountServicesEnabled: accountServicesEnabled ?? false,
+        isInternal: isInternal ?? false,
         fields,
         formOwner: formOwner ?? null,
         formTreater: formTreater ?? null,

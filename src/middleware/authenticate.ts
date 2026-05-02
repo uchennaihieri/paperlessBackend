@@ -36,14 +36,19 @@ export async function authenticate(
 
     // ── Password-change invalidation ──────────────────────────────────────────
     // If the user's password was changed after this token was issued, reject it.
+    //
+    // IMPORTANT: JWT `iat` is in whole seconds. `passwordChangedAt` is stored
+    // with millisecond precision. We truncate to seconds before comparing so
+    // a fresh token issued in the same second as the password update is NOT
+    // falsely rejected (which would create an unbreakable login loop).
     if (payload.id) {
       const user = await prisma.user.findUnique({
         where: { id: Number(payload.id) },
         select: { passwordChangedAt: true },
       });
       if (user?.passwordChangedAt) {
-        const issuedAt = payload.iat ? new Date(payload.iat * 1000) : null;
-        if (issuedAt && user.passwordChangedAt > issuedAt) {
+        const pwChangedAtSec = Math.floor(user.passwordChangedAt.getTime() / 1000);
+        if (payload.iat && pwChangedAtSec > payload.iat) {
           res.status(401).json({ success: false, error: "Session expired due to a password change. Please log in again.", code: "PASSWORD_CHANGED" });
           return;
         }

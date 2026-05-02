@@ -94,12 +94,22 @@ router.post("/login", async (req: Request, res: Response) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STEP 2 – POST /api/v1/auth/verify-otp
-// Confirm OTP → returns JWT (with mustResetPassword flag in response).
+// Confirm OTP → optionally sets a new password (reset flow) → returns JWT.
+//
+// When `newPassword` is supplied: the temporary password that was used to reach
+// this step is treated purely as a verification token (like a first-factor OTP).
+// The new password is hashed and saved for ALL role rows of this employee,
+// and the issued JWT has mustResetPassword: false so no further redirect occurs.
 // ─────────────────────────────────────────────────────────────────────────────
 router.post("/verify-otp", async (req: Request, res: Response) => {
-  const { email, otp } = req.body;
+  const { email, otp, newPassword } = req.body;
   if (!email || !otp) {
     res.status(400).json({ success: false, error: "Email and OTP are required." });
+    return;
+  }
+
+  if (newPassword !== undefined && newPassword.length < 8) {
+    res.status(400).json({ success: false, error: "New password must be at least 8 characters." });
     return;
   }
 
@@ -113,6 +123,28 @@ router.post("/verify-otp", async (req: Request, res: Response) => {
       return;
     }
     await prisma.verificationToken.delete({ where: { id: record.id } });
+  }
+
+  // ── If a new password was supplied, update ALL role rows atomically ────────
+  if (newPassword) {
+    const hash = await bcrypt.hash(newPassword, 12);
+    // Find one representative row to get the employee_id
+    const representative = await prisma.user.findFirst({
+      where: { finca_email: { equals: email, mode: "insensitive" } },
+      select: { employee_id: true },
+    });
+    if (representative?.employee_id) {
+      await prisma.user.updateMany({
+        where: { employee_id: { equals: representative.employee_id, mode: "insensitive" } },
+        data: { passwordHash: hash, mustResetPassword: false, passwordChangedAt: new Date() },
+      });
+    } else {
+      // Fallback: update by email
+      await prisma.user.updateMany({
+        where: { finca_email: { equals: email, mode: "insensitive" } },
+        data: { passwordHash: hash, mustResetPassword: false, passwordChangedAt: new Date() },
+      });
+    }
   }
 
   const userRoles = await prisma.user.findMany({
@@ -148,6 +180,9 @@ router.post("/verify-otp", async (req: Request, res: Response) => {
   }));
 
   const secret = process.env.JWT_SECRET ?? "supersecretjwtkey";
+  // mustResetPassword is always false after this step when newPassword was provided
+  const effectiveMustReset = newPassword ? false : (defaultRole.mustResetPassword ?? false);
+
   const token = jwt.sign(
     {
       id: defaultRole.id,
@@ -166,8 +201,8 @@ router.post("/verify-otp", async (req: Request, res: Response) => {
   res.json({
     success: true,
     token,
-    mustResetPassword: defaultRole.mustResetPassword,
-    isLegacyAccount: !defaultRole.passwordHash, // true if account has no password set yet
+    mustResetPassword: effectiveMustReset,
+    isLegacyAccount: !defaultRole.passwordHash && !newPassword,
     user: {
       id: defaultRole.id,
       name: defaultRole.user_name,
@@ -178,6 +213,7 @@ router.post("/verify-otp", async (req: Request, res: Response) => {
     },
   });
 });
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STEP 3 – POST /api/v1/auth/reset-password
@@ -203,10 +239,21 @@ router.post("/reset-password", authenticate as any, async (req: AuthRequest, res
   }
 
   const hash = await bcrypt.hash(newPassword, 12);
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { passwordHash: hash, mustResetPassword: false, passwordChangedAt: new Date() },
-  });
+
+  // Update ALL role rows for this employee so no row is left with a null/old hash.
+  // This prevents Bug: "delete first role → remaining row has no password" scenario.
+  if (user.employee_id) {
+    await prisma.user.updateMany({
+      where: { employee_id: { equals: user.employee_id, mode: "insensitive" } },
+      data: { passwordHash: hash, mustResetPassword: false, passwordChangedAt: new Date() },
+    });
+  } else {
+    // Fallback: no employee_id, update just this row
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash: hash, mustResetPassword: false, passwordChangedAt: new Date() },
+    });
+  }
 
   res.json({ success: true, message: "Password updated successfully." });
 });

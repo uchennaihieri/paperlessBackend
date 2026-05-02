@@ -229,7 +229,56 @@ router.post("/:id/assign-self", async (req: AuthRequest, res: Response) => {
   res.json({ success: true, newStatus });
 });
 
-// ── POST /api/v1/workflow/:id/complete ─────────────────────────────────────────
+// ── PATCH /api/v1/workflow/:id/revert-assignment ──────────────────────────────
+// Allows the assigned treater to release their self-assignment, reverting
+// the submission back to "Processing" so another treater can pick it up.
+router.patch("/:id/revert-assignment", async (req: AuthRequest, res: Response) => {
+  const email = req.user?.email ?? null;
+  if (!email) {
+    res.status(401).json({ success: false, error: "Not authenticated." });
+    return;
+  }
+
+  const current = await prisma.formSubmission.findUnique({
+    where: { id: req.params.id },
+    select: { status: true, reference: true, treaterEmail: true },
+  });
+
+  if (!current) {
+    res.status(404).json({ success: false, error: "Submission not found." });
+    return;
+  }
+
+  if (!current.status.startsWith("Assigned")) {
+    res.status(400).json({ success: false, error: "This submission is not currently assigned." });
+    return;
+  }
+
+  // Only the person who assigned themselves can revert
+  if (current.treaterEmail?.toLowerCase() !== email.toLowerCase()) {
+    res.status(403).json({ success: false, error: "Only the person who self-assigned can revert the assignment." });
+    return;
+  }
+
+  await prisma.formSubmission.update({
+    where: { id: req.params.id },
+    data: { status: "Processing", treatedBy: null, treaterEmail: null },
+  });
+
+  await logAudit({
+    submissionId:  req.params.id,
+    formReference: current.reference,
+    prevStatus:    current.status,
+    newStatus:     "Processing",
+    action:        "assignment_reverted",
+    actorEmail:    email,
+    note:          "Assignee reverted self-assignment — returned to Processing",
+  });
+
+  res.json({ success: true, newStatus: "Processing" });
+});
+
+
 // Complete processing: optionally route to a final approver.
 // A signatureToken is ALWAYS required from the treater, regardless of routing.
 router.post("/:id/complete", async (req: AuthRequest, res: Response) => {
