@@ -36,6 +36,7 @@ import mobileSubmitRouter from "./routes/mobile_submit";
 import prerequisitesRouter from "./routes/prerequisites";
 import formAccessRouter from "./routes/formAccess";
 import journalRouter from "./routes/journal";
+import lookupRouter from "./routes/lookup";
 
 const app = express();
 const PORT = process.env.PORT ?? 4000;
@@ -100,6 +101,7 @@ v1.use("/mobile_submit", mobileSubmitRouter);
 v1.use("/prerequisites", prerequisitesRouter);
 v1.use("/forms-access", formAccessRouter);
 v1.use("/journal", journalRouter);
+v1.use("/lookup", lookupRouter);
 
 
 app.use("/api/v1", v1);

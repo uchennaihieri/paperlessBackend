@@ -10,7 +10,8 @@ router.use(authenticate as any);
 // ── GET /api/v1/forms ─────────────────────────────────────────────────────────
 router.get("/", async (req: AuthRequest, res: Response) => {
   const userRole = (req.user?.user_role ?? "").toLowerCase();
-  const isAdmin = userRole === "administrator" || userRole === "admin" || userRole === "superadmin";
+  const specialAccess = (req.user?.specialAccess ?? "").toLowerCase();
+  const isAdmin = userRole === "administrator" || userRole === "admin" || userRole === "superadmin" || specialAccess.includes("administrator");
   const email = req.user?.email?.toLowerCase() ?? "";
 
   let templates;
@@ -97,7 +98,8 @@ router.get("/:id", async (req: AuthRequest, res: Response) => {
   }
 
   const userRole = (req.user?.user_role ?? "").toLowerCase();
-  const isAdmin = userRole === "administrator" || userRole === "admin" || userRole === "superadmin";
+  const specialAccess = (req.user?.specialAccess ?? "").toLowerCase();
+  const isAdmin = userRole === "administrator" || userRole === "admin" || userRole === "superadmin" || specialAccess.includes("administrator");
   const email = req.user?.email?.toLowerCase() ?? "";
 
   if (!isAdmin) {

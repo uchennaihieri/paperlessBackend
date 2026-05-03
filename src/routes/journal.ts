@@ -42,11 +42,10 @@ router.post("/", async (req: AuthRequest, res: Response) => {
     return;
   }
 
-  const callerEmail = req.user?.email?.toLowerCase() ?? "";
-  const isAdmin = ["administrator", "admin", "superadmin"].includes((req.user?.user_role ?? "").toLowerCase());
+  const isAccountant = (req.user?.specialAccess ?? "").toLowerCase().includes("accountant");
 
-  if (!isAdmin && submission.treaterEmail?.toLowerCase() !== callerEmail) {
-    res.status(403).json({ success: false, error: "Only the assigned officer can add journal entries for this form." });
+  if (!isAccountant) {
+    res.status(403).json({ success: false, error: "Only accountants can add journal entries." });
     return;
   }
 
@@ -246,11 +245,10 @@ router.post("/commit/:reference", async (req: AuthRequest, res: Response) => {
     return;
   }
 
-  const callerEmail = req.user?.email?.toLowerCase() ?? "";
-  const isAdmin = ["administrator", "admin", "superadmin"].includes((req.user?.user_role ?? "").toLowerCase());
+  const isAccountant = (req.user?.specialAccess ?? "").toLowerCase().includes("accountant");
 
-  if (!isAdmin && submission.treaterEmail?.toLowerCase() !== callerEmail) {
-    res.status(403).json({ success: false, error: "Only the assigned officer can commit journal entries." });
+  if (!isAccountant) {
+    res.status(403).json({ success: false, error: "Only accountants can commit journal entries." });
     return;
   }
 
@@ -295,9 +293,7 @@ router.post("/link", async (req: AuthRequest, res: Response) => {
     return;
   }
 
-  // Caller must be the treater of the primary session
-  const callerEmail = req.user?.email?.toLowerCase() ?? "";
-  const isAdmin = ["administrator", "admin", "superadmin"].includes((req.user?.user_role ?? "").toLowerCase());
+  const isAccountant = (req.user?.specialAccess ?? "").toLowerCase().includes("accountant");
 
   const primarySub = await prisma.formSubmission.findFirst({
     where: { reference: primaryRef },
@@ -307,8 +303,8 @@ router.post("/link", async (req: AuthRequest, res: Response) => {
     res.status(404).json({ success: false, error: `Form ${primaryRef} not found.` });
     return;
   }
-  if (!isAdmin && primarySub.treaterEmail?.toLowerCase() !== callerEmail) {
-    res.status(403).json({ success: false, error: "Only the assigned officer of this form can initiate a link." });
+  if (!isAccountant) {
+    res.status(403).json({ success: false, error: "Only accountants can initiate a journal link." });
     return;
   }
 
@@ -344,16 +340,15 @@ router.post("/link", async (req: AuthRequest, res: Response) => {
 router.delete("/link/:reference", async (req: AuthRequest, res: Response) => {
   const ref = req.params.reference;
 
-  const callerEmail = req.user?.email?.toLowerCase() ?? "";
-  const isAdmin = ["administrator", "admin", "superadmin"].includes((req.user?.user_role ?? "").toLowerCase());
+  const isAccountant = (req.user?.specialAccess ?? "").toLowerCase().includes("accountant");
 
   const sub = await prisma.formSubmission.findFirst({
     where: { reference: ref },
     select: { treaterEmail: true },
   });
   if (!sub) { res.status(404).json({ success: false, error: "Form not found." }); return; }
-  if (!isAdmin && sub.treaterEmail?.toLowerCase() !== callerEmail) {
-    res.status(403).json({ success: false, error: "Only the assigned officer can unlink this session." });
+  if (!isAccountant) {
+    res.status(403).json({ success: false, error: "Only accountants can unlink this session." });
     return;
   }
 
@@ -388,11 +383,10 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
     select: { treaterEmail: true },
   });
 
-  const callerEmail = req.user?.email?.toLowerCase() ?? "";
-  const isAdmin = ["administrator", "admin", "superadmin"].includes((req.user?.user_role ?? "").toLowerCase());
+  const isAccountant = (req.user?.specialAccess ?? "").toLowerCase().includes("accountant");
 
-  if (!isAdmin && submission?.treaterEmail?.toLowerCase() !== callerEmail) {
-    res.status(403).json({ success: false, error: "Only the assigned officer can edit this entry." });
+  if (!isAccountant) {
+    res.status(403).json({ success: false, error: "Only accountants can edit this entry." });
     return;
   }
 
@@ -428,11 +422,10 @@ router.delete("/:id", async (req: AuthRequest, res: Response) => {
     select: { treaterEmail: true },
   });
 
-  const callerEmail = req.user?.email?.toLowerCase() ?? "";
-  const isAdmin = ["administrator", "admin", "superadmin"].includes((req.user?.user_role ?? "").toLowerCase());
+  const isAccountant = (req.user?.specialAccess ?? "").toLowerCase().includes("accountant");
 
-  if (!isAdmin && submission?.treaterEmail?.toLowerCase() !== callerEmail) {
-    res.status(403).json({ success: false, error: "Only the assigned officer can delete this entry." });
+  if (!isAccountant) {
+    res.status(403).json({ success: false, error: "Only accountants can delete this entry." });
     return;
   }
 

@@ -27,7 +27,7 @@ async function resolveGrantedEmails(emails: string[]): Promise<{ valid: string[]
 
 // ── Helper: check if current user is an admin ─────────────────────────────────
 function isAdmin(req: AuthRequest): boolean {
-  return req.user?.user_role?.toLowerCase() === "administrator";
+  return req.user?.user_role?.toLowerCase() === "administrator" || (req.user?.specialAccess?.toLowerCase().includes("administrator") ?? false);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

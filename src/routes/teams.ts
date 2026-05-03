@@ -30,7 +30,7 @@ router.get("/", async (_req, res: Response) => {
           roles: [] as typeof users,
         };
       }
-      acc[key].roles.push(user);
+      acc[key].roles.push(user); // each role row includes user_role, branch, specialAccess
       return acc;
     },
     {} as Record<string, any>
@@ -40,9 +40,9 @@ router.get("/", async (_req, res: Response) => {
 });
 
 // ── POST /api/v1/teams ────────────────────────────────────────────────────────
-// Add a new user role record
+// Create a new user record
 router.post("/", async (req: AuthRequest, res: Response) => {
-  const { user_name, finca_email, employee_id, login_id, user_no, user_role, branch } = req.body;
+  const { user_name, finca_email, employee_id, login_id, user_no, user_role, branch, specialAccess } = req.body;
 
   const maxUser = await prisma.user.aggregate({ _max: { id: true } });
   const nextId = (maxUser._max.id || 0) + 1;
@@ -57,6 +57,7 @@ router.post("/", async (req: AuthRequest, res: Response) => {
       user_no,
       user_role,
       branch,
+      specialAccess: specialAccess && specialAccess !== "None" ? specialAccess : null,
       status: "active",
       lock_flag: false,
       creation_date: new Date(),
@@ -88,6 +89,22 @@ router.patch("/bulk-info", async (req, res: Response) => {
       employee_id: data.employee_id,
       login_id: data.login_id,
       user_no: data.user_no,
+    },
+  });
+  res.json({ success: true });
+});
+
+// ── PATCH /api/v1/teams/:id ───────────────────────────────────────────────────
+// Update per-row fields: user_role, branch, specialAccess
+router.patch("/:id", async (req, res: Response) => {
+  const id = parseInt(req.params.id);
+  const { user_role, branch, specialAccess } = req.body;
+  await prisma.user.update({
+    where: { id },
+    data: {
+      ...(user_role !== undefined ? { user_role } : {}),
+      ...(branch !== undefined ? { branch } : {}),
+      ...(specialAccess !== undefined ? { specialAccess: specialAccess === "None" ? null : specialAccess } : {}),
     },
   });
   res.json({ success: true });

@@ -9,6 +9,7 @@ export interface AuthRequest extends Request {
     user_name: string;
     user_role: string;
     branch: string | null;
+    specialAccess: string | null;
     employee_id: string | null;
   };
 }
@@ -71,7 +72,10 @@ export function requireAdmin(
   res: Response,
   next: NextFunction
 ): void {
-  if (req.user?.user_role?.toLowerCase() !== "administrator") {
+  const isRoleAdmin = req.user?.user_role?.toLowerCase() === "administrator";
+  const isSpecialAdmin = req.user?.specialAccess?.toLowerCase().includes("administrator");
+
+  if (!isRoleAdmin && !isSpecialAdmin) {
     res.status(403).json({ success: false, error: "Forbidden: Administrators only" });
     return;
   }

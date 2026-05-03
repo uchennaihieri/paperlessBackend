@@ -160,20 +160,23 @@ router.post("/verify-otp", async (req: Request, res: Response) => {
     return;
   }
 
-  const isSystemAdmin = userRoles.some((r: any) => r.user_role?.toLowerCase() === "administrator");
+  const isSystemAdmin = userRoles.some((r: any) => 
+    r.user_role?.toLowerCase() === "administrator" || r.specialAccess?.toLowerCase().includes("administrator")
+  );
   if (userRoles.length > 1 && !isSystemAdmin) {
     res.status(400).json({ success: false, error: "Account locked: multiple active roles detected. Contact administrator." });
     return;
   }
 
   const defaultRole = isSystemAdmin
-    ? userRoles.find((r: any) => r.user_role?.toLowerCase() === "administrator")!
+    ? userRoles.find((r: any) => r.user_role?.toLowerCase() === "administrator" || r.specialAccess?.toLowerCase().includes("administrator"))!
     : userRoles[0];
 
   const minimalRoles = userRoles.map((r: any) => ({
     id: r.id.toString(),
     user_role: r.user_role,
     branch: r.branch,
+    specialAccess: r.specialAccess,
     user_name: r.user_name,
     finca_email: r.finca_email,
     employee_id: r.employee_id,
@@ -190,6 +193,7 @@ router.post("/verify-otp", async (req: Request, res: Response) => {
       user_name: defaultRole.user_name,
       user_role: defaultRole.user_role,
       branch: defaultRole.branch,
+      specialAccess: defaultRole.specialAccess,
       employee_id: defaultRole.employee_id,
       roles: minimalRoles,
       activeRoleId: defaultRole.id.toString(),
@@ -209,6 +213,7 @@ router.post("/verify-otp", async (req: Request, res: Response) => {
       email: defaultRole.finca_email,
       user_role: defaultRole.user_role,
       branch: defaultRole.branch,
+      specialAccess: defaultRole.specialAccess,
       roles: minimalRoles,
     },
   });

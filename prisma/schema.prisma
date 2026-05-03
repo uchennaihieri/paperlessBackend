@@ -28,6 +28,9 @@ model User {
   mustResetPassword Boolean   @default(true)  // true on first login
   passwordChangedAt DateTime? // set on every password change; JWTs issued before this are rejected
 
+  // Access fields
+  specialAccess    String?   @db.VarChar(100) // e.g. "None", "Administrator", "Accountant", or custom
+
   // System added fields
   signature        String?
   submissions      FormSubmission[]
@@ -298,4 +301,16 @@ model DeviceRegistration {
 
   @@unique([userId, deviceId])
   @@map("device_registrations")
+}
+
+// Persistent lookup values for dynamic dropdowns (roles, branches, special access)
+// Allows admins to type new values that persist for future use.
+model LookupValue {
+  id        String   @id @default(cuid())
+  type      String   @db.VarChar(50)  // "role" | "branch" | "specialAccess"
+  value     String   @db.VarChar(150) // The display value
+  createdAt DateTime @default(now())
+
+  @@unique([type, value])
+  @@map("lookup_values")
 }
