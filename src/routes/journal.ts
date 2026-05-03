@@ -42,6 +42,14 @@ router.post("/", async (req: AuthRequest, res: Response) => {
     return;
   }
 
+  // Enforce that only the assigned treater or final approver can perform journal operations
+  const isAssignedTreater = submission.status.startsWith("Assigned") && submission.treaterEmail?.toLowerCase() === req.user?.email?.toLowerCase();
+  const isFinalApprover = submission.status === "Awaiting Final Approval";
+  if (!isAssignedTreater && !isFinalApprover) {
+    res.status(403).json({ success: false, error: "Only the assigned treater or final approver can perform journal operations." });
+    return;
+  }
+
   const isAccountant = (req.user?.specialAccess ?? "").toLowerCase().includes("accountant");
 
   if (!isAccountant) {
@@ -63,7 +71,7 @@ router.post("/", async (req: AuthRequest, res: Response) => {
       branch: branch ?? null,
       description,
       amount: new Decimal(amount),
-      createdBy: callerEmail,
+      createdBy: req.user?.email ?? "Unknown",
       committed: false,
     },
   });
