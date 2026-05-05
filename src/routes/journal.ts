@@ -17,10 +17,22 @@ async function nextEntryId(): Promise<string> {
   return `jv${isNaN(num) ? 1 : num + 1}`;
 }
 
+// ── Helper: generate next journalId (JE1, JE2...) ──────────────────────────────
+async function nextJournalId(): Promise<string> {
+  const last = await prisma.journalEntry.findFirst({
+    where: { journalId: { not: null } },
+    orderBy: { date: "desc" },
+    select: { journalId: true },
+  });
+  if (!last || !last.journalId) return "JE1";
+  const num = parseInt(last.journalId.replace("JE", ""), 10);
+  return `JE${isNaN(num) ? 1 : num + 1}`;
+}
+
 // ── POST /api/v1/journal ──────────────────────────────────────────────────────
 // Add a single journal line. Only the assigned treater for the form can post.
 router.post("/", async (req: AuthRequest, res: Response) => {
-  const { sessionRef, formName, type, accountCode, accountName, batchNumber, branch, description, amount } = req.body;
+  const { sessionRef, formName, type, accountCode, accountName, batchNumber, branch, description, amount, journalId } = req.body;
 
   if (!sessionRef || !formName || !type || !accountCode || !accountName || !description || !amount) {
     res.status(400).json({ success: false, error: "Missing required fields." });
@@ -58,10 +70,12 @@ router.post("/", async (req: AuthRequest, res: Response) => {
   }
 
   const entryId = await nextEntryId();
+  const finalJournalId = journalId || await nextJournalId();
 
   const entry = await prisma.journalEntry.create({
     data: {
       entryId,
+      journalId: finalJournalId,
       sessionRef,
       formName,
       type,
@@ -79,12 +93,55 @@ router.post("/", async (req: AuthRequest, res: Response) => {
   res.status(201).json({ success: true, data: entry });
 });
 
+// ── POST /api/v1/journal/batch ────────────────────────────────────────────────
+// Add multiple journal lines at once. They will all share a single newly generated journalId.
+router.post("/batch", async (req: AuthRequest, res: Response) => {
+  const { drafts } = req.body;
+  if (!Array.isArray(drafts) || drafts.length === 0) {
+    res.status(400).json({ success: false, error: "No drafts provided." });
+    return;
+  }
+
+  const isAccountant = (req.user?.specialAccess ?? "").toLowerCase().includes("accountant");
+  if (!isAccountant) {
+    res.status(403).json({ success: false, error: "Only accountants can add journal entries." });
+    return;
+  }
+
+  const journalId = await nextJournalId();
+  const results = [];
+
+  for (const draft of drafts) {
+    const entryId = await nextEntryId();
+    const entry = await prisma.journalEntry.create({
+      data: {
+        entryId,
+        journalId,
+        sessionRef: draft.sessionRef,
+        formName: draft.formName,
+        type: draft.type,
+        accountCode: draft.accountCode,
+        accountName: draft.accountName,
+        batchNumber: draft.batchNumber ?? null,
+        branch: draft.branch ?? null,
+        description: draft.description,
+        amount: new Decimal(draft.amount),
+        createdBy: req.user?.email ?? "Unknown",
+        committed: false,
+      },
+    });
+    results.push(entry);
+  }
+
+  res.status(201).json({ success: true, data: results });
+});
+
 // ── GET /api/v1/journal ───────────────────────────────────────────────────────
 // Global ledger — committed entries only. Supports filtering.
 router.get("/", async (req: AuthRequest, res: Response) => {
   const { from, to, account, description, form, page = "1", limit = "50" } = req.query as Record<string, string>;
 
-  const where: any = { committed: true };
+  const where: any = {};
 
   if (from || to) {
     where.date = {};
@@ -111,7 +168,16 @@ router.get("/", async (req: AuthRequest, res: Response) => {
     prisma.journalEntry.findMany({ where, orderBy: { date: "asc" }, skip, take: parseInt(limit) }),
   ]);
 
-  res.json({ success: true, total, page: parseInt(page), data: entries });
+  res.json({
+    success: true,
+    meta: {
+      total,
+      page: parseInt(page),
+      limit: parseInt(limit),
+      pages: Math.ceil(total / parseInt(limit)),
+    },
+    data: entries,
+  });
 });
 
 // ── GET /api/v1/journal/unbalanced ───────────────────────────────────────────
@@ -177,27 +243,43 @@ router.get("/unbalanced", async (req: AuthRequest, res: Response) => {
 });
 
 // ── Shared helper: resolve the set of sessionRefs to balance/query ─────────────
-async function resolveScope(ref: string): Promise<{ where: any; linkedRefs: string[]; batchGroupId: string | null }> {
-  // Check if any entry for this ref has a batchGroupId
+async function resolveScope(ref: string): Promise<{ where: any; linkedRefs: string[]; batchGroupId: string | null; journalId: string | null }> {
+  // Try finding by journalId first
   const sample = await prisma.journalEntry.findFirst({
+    where: { sessionRef: ref, journalId: { not: null } },
+    select: { journalId: true },
+  });
+
+  if (sample?.journalId) {
+    const journalId = sample.journalId;
+    const allInBatch = await prisma.journalEntry.findMany({
+      where: { journalId },
+      select: { sessionRef: true },
+      distinct: ["sessionRef"],
+    });
+    const linkedRefs = allInBatch.map((e) => e.sessionRef).filter((r) => r !== ref);
+    return { where: { journalId }, linkedRefs, batchGroupId: null, journalId };
+  }
+
+  // Fallback to legacy batchGroupId if no journalId is found
+  const legacySample = await prisma.journalEntry.findFirst({
     where: { sessionRef: ref, batchGroupId: { not: null } },
     select: { batchGroupId: true },
   });
 
-  if (!sample?.batchGroupId) {
-    return { where: { sessionRef: ref }, linkedRefs: [], batchGroupId: null };
+  if (!legacySample?.batchGroupId) {
+    return { where: { sessionRef: ref }, linkedRefs: [], batchGroupId: null, journalId: null };
   }
 
-  const batchGroupId = sample.batchGroupId;
-  // Find all distinct sessionRefs in this batch
-  const allInBatch = await prisma.journalEntry.findMany({
+  const batchGroupId = legacySample.batchGroupId;
+  const allInLegacy = await prisma.journalEntry.findMany({
     where: { batchGroupId },
     select: { sessionRef: true },
     distinct: ["sessionRef"],
   });
-  const linkedRefs = allInBatch.map((e) => e.sessionRef).filter((r) => r !== ref);
+  const legacyLinkedRefs = allInLegacy.map((e) => e.sessionRef).filter((r) => r !== ref);
 
-  return { where: { batchGroupId }, linkedRefs, batchGroupId };
+  return { where: { batchGroupId }, linkedRefs: legacyLinkedRefs, batchGroupId, journalId: null };
 }
 
 // ── GET /api/v1/journal/balance/:reference ────────────────────────────────────
@@ -231,9 +313,9 @@ router.get("/balance/:reference", async (req: AuthRequest, res: Response) => {
 // ── GET /api/v1/journal/session/:reference ────────────────────────────────────
 // All entries for one form session. If part of a batch, returns all batch entries.
 router.get("/session/:reference", async (req: AuthRequest, res: Response) => {
-  const { where, linkedRefs, batchGroupId } = await resolveScope(req.params.reference);
+  const { where, linkedRefs, batchGroupId, journalId } = await resolveScope(req.params.reference);
   const entries = await prisma.journalEntry.findMany({ where, orderBy: { date: "asc" } });
-  res.json({ success: true, data: entries, linkedRefs, batchGroupId });
+  res.json({ success: true, data: entries, linkedRefs, batchGroupId, journalId });
 });
 
 // ── POST /api/v1/journal/commit/:reference ────────────────────────────────────

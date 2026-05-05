@@ -484,7 +484,7 @@ router.post("/:id/decline-final", async (req: AuthRequest, res: Response) => {
     action:        "final_declined",
     actorName:     declinedFinalName,
     actorEmail:    email,
-    note:          "Final approver declined — returned to Processing",
+    note:          "Final approver returned — returned to Processing",
   });
 
   // Uncommit journal entries — approver returned the form, entries revert to pending
@@ -493,6 +493,92 @@ router.post("/:id/decline-final", async (req: AuthRequest, res: Response) => {
       where: { sessionRef: sub.reference },
       data:  { committed: false },
     });
+  }
+
+  res.json({ success: true });
+});
+
+// ── POST /api/v1/workflow/:id/disapprove-final ──────────────────────────────────
+// Final approver permanently disapproves the submission → status changes to "Not Approved"
+router.post("/:id/disapprove-final", async (req: AuthRequest, res: Response) => {
+  const email = req.user?.email ?? null;
+  if (!email) { res.status(401).json({ success: false, error: "Not authenticated." }); return; }
+
+  const { reason } = req.body;
+  if (!reason || !reason.trim()) {
+    res.status(400).json({ success: false, error: "A reason is required to disapprove." });
+    return;
+  }
+
+  const sub = await prisma.formSubmission.findUnique({
+    where: { id: req.params.id },
+    select: { status: true, approverEmail: true, reference: true, formName: true, submittedBy: { select: { finca_email: true, user_name: true } } },
+  });
+
+  if (!sub || sub.status !== "Awaiting Final Approval") {
+    res.status(400).json({ success: false, error: "Submission is not awaiting final approval." });
+    return;
+  }
+  if (sub.approverEmail?.toLowerCase() !== email.toLowerCase()) {
+    res.status(403).json({ success: false, error: "You are not the designated approver." });
+    return;
+  }
+
+  const disapprovedFinalUser = await prisma.user.findFirst({
+    where: { finca_email: { equals: email!, mode: "insensitive" } },
+    select: { user_name: true },
+  });
+  const disapprovedFinalName = disapprovedFinalUser?.user_name ?? email;
+
+  await prisma.formSubmission.update({
+    where: { id: req.params.id },
+    data: { status: "Not Approved" },
+  });
+
+  await logAudit({
+    submissionId:  req.params.id,
+    formReference: sub.reference ?? null,
+    prevStatus:    "Awaiting Final Approval",
+    newStatus:     "Not Approved",
+    action:        "final_disapproved",
+    actorName:     disapprovedFinalName,
+    actorEmail:    email,
+    note:          reason.trim(),
+  });
+
+  // Uncommit journal entries
+  if (sub.reference) {
+    await prisma.journalEntry.updateMany({
+      where: { sessionRef: sub.reference },
+      data:  { committed: false },
+    });
+  }
+
+  // Send email to submitter
+  if (sub.submittedBy?.finca_email) {
+    const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
+    mailer.sendMail({
+      from: `Paperless <${process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
+      to: sub.submittedBy.finca_email,
+      subject: `Submission Disapproved: "${sub.formName}"`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
+          <h2 style="color: #B50938; margin-bottom: 4px;">Paperless by FINCA</h2>
+          <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
+          <hr style="border-color: #e5e7eb; margin: 20px 0;" />
+          <p style="font-size: 15px; color: #111827;">Hi <strong>${sub.submittedBy.user_name ?? "there"}</strong>,</p>
+          <p style="font-size: 14px; color: #374151;">
+            Your submission has been <strong>Disapproved</strong> by the final approver and will not be processed further.
+          </p>
+          <div style="background: #fef2f2; border-left: 4px solid #ef4444; border-radius: 4px; padding: 16px; margin: 16px 0;">
+            <p style="margin: 0; font-weight: 600; color: #991b1b;">${sub.formName}</p>
+            <p style="margin: 4px 0 0; font-size: 13px; color: #b91c1c;">Reference: ${sub.reference ?? "N/A"}</p>
+            <p style="margin: 8px 0 0; font-size: 14px; color: #991b1b;"><strong>Reason:</strong> ${reason.trim()}</p>
+          </div>
+          <a href="${appUrl}/dashboard/forms/submission/${req.params.id}" style="display: inline-block; background: #ef4444; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; margin-top: 8px;">View Submission</a>
+        </div>
+      `,
+    }).catch((e: any) => console.error("[disapprove email]", e));
   }
 
   res.json({ success: true });
@@ -690,6 +776,102 @@ router.post("/:id/decline", async (req: AuthRequest, res: Response) => {
       where: { sessionRef: currentForDecline.reference },
       data:  { committed: false },
     });
+  }
+
+  res.json({ success: true });
+});
+
+// ── POST /api/v1/workflow/:id/disapprove-signatory ───────────────────────────
+router.post("/:id/disapprove-signatory", async (req: AuthRequest, res: Response) => {
+  const email = req.user?.email ?? null;
+  if (!email) { res.status(401).json({ success: false, error: "Not authenticated." }); return; }
+
+  const { reason } = req.body;
+  if (!reason || !reason.trim()) {
+    res.status(400).json({ success: false, error: "A reason is required to disapprove." });
+    return;
+  }
+
+  const sigRow = await prisma.submissionSignatory.findFirst({
+    where: {
+      submissionId: req.params.id,
+      email: { equals: email, mode: "insensitive" },
+      status: "Pending",
+    },
+  });
+
+  if (!sigRow) {
+    res.status(404).json({ success: false, error: "Signatory record not found." });
+    return;
+  }
+
+  await prisma.submissionSignatory.update({
+    where: { id: sigRow.id },
+    data: {
+      status: "Declined",
+      signedAt: new Date(),
+      declineReason: reason.trim(),
+    },
+  });
+
+  const currentForDecline = await prisma.formSubmission.findUnique({
+    where: { id: req.params.id },
+    select: { status: true, reference: true, formName: true, submittedBy: { select: { finca_email: true, user_name: true } } },
+  });
+
+  const declinerUser = await prisma.user.findFirst({
+    where: { finca_email: { equals: email!, mode: "insensitive" } },
+    select: { user_name: true },
+  });
+  const declinerName = declinerUser?.user_name ?? email;
+
+  await prisma.formSubmission.update({
+    where: { id: req.params.id },
+    data: { status: "Not Approved" },
+  });
+
+  await logAudit({
+    submissionId:  req.params.id,
+    formReference: currentForDecline?.reference,
+    prevStatus:    currentForDecline?.status ?? "",
+    newStatus:     "Not Approved",
+    action:        "disapproved",
+    actorName:     declinerName,
+    actorEmail:    email,
+    note:          reason.trim(),
+  });
+
+  if (currentForDecline?.reference) {
+    await prisma.journalEntry.updateMany({
+      where: { sessionRef: currentForDecline.reference },
+      data:  { committed: false },
+    });
+  }
+
+  if (currentForDecline?.submittedBy?.finca_email) {
+    const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
+    mailer.sendMail({
+      from: `Paperless <${process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
+      to: currentForDecline.submittedBy.finca_email,
+      subject: `Submission Disapproved: "${currentForDecline.formName}"`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
+          <h2 style="color: #B50938; margin-bottom: 4px;">Paperless by FINCA</h2>
+          <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
+          <hr style="border-color: #e5e7eb; margin: 20px 0;" />
+          <p style="font-size: 15px; color: #111827;">Hi <strong>${currentForDecline.submittedBy.user_name ?? "there"}</strong>,</p>
+          <p style="font-size: 14px; color: #374151;">
+            Your submission has been <strong>Disapproved</strong> by a signatory and will not be processed further.
+          </p>
+          <div style="background: #fef2f2; border-left: 4px solid #ef4444; border-radius: 4px; padding: 16px; margin: 16px 0;">
+            <p style="margin: 0; font-weight: 600; color: #991b1b;">${currentForDecline.formName}</p>
+            <p style="margin: 4px 0 0; font-size: 13px; color: #b91c1c;">Reference: ${currentForDecline.reference ?? "N/A"}</p>
+            <p style="margin: 8px 0 0; font-size: 14px; color: #991b1b;"><strong>Reason:</strong> ${reason.trim()}</p>
+          </div>
+          <a href="${appUrl}/dashboard/forms/submission/${req.params.id}" style="display: inline-block; background: #ef4444; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; margin-top: 8px;">View Submission</a>
+        </div>
+      `,
+    }).catch((e: any) => console.error("[disapprove email]", e));
   }
 
   res.json({ success: true });

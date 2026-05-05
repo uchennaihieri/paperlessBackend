@@ -32,7 +32,7 @@ router.use(authenticate as any);
 router.get("/", async (_req, res: Response) => {
   const submissions = await prisma.formSubmission.findMany({
     where: {
-      status: { not: "Internal Attachment" }
+      status: { notIn: ["Internal Attachment", "Not Approved"] }
     },
     orderBy: { createdAt: "desc" },
     include: {
@@ -50,7 +50,7 @@ router.get("/my", async (req: AuthRequest, res: Response) => {
   const submissions = await prisma.formSubmission.findMany({
     where: { 
       submittedById: req.user.id,
-      status: { not: "Internal Attachment" }
+      status: { notIn: ["Internal Attachment", "Not Approved"] }
     },
     orderBy: { createdAt: "desc" },
     include: { 
@@ -67,6 +67,51 @@ router.get("/action-items", async (req: AuthRequest, res: Response) => {
   const userBranch = req.user?.branch ?? null;
   if (!userBranch) { res.json({ success: true, data: [] }); return; }
 
+  // ── Lazy revert: if a form has been "Assigned" for over 1 hour without being
+  // completed, automatically push it back to "Processing" so it becomes
+  // available to any branch officer again.
+  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+  const stale = await prisma.formSubmission.findMany({
+    where: {
+      status: { startsWith: "Assigned" },
+      updatedAt: { lt: oneHourAgo },
+      template: { formTreater: { equals: userBranch, mode: "insensitive" } },
+    },
+    select: { id: true, status: true, reference: true, treatedBy: true, treaterEmail: true },
+  });
+
+  if (stale.length > 0) {
+    const staleIds  = stale.map((s) => s.id);
+    const staleRefs = stale.map((s) => s.reference).filter(Boolean) as string[];
+
+    await prisma.formSubmission.updateMany({
+      where: { id: { in: staleIds } },
+      data: { status: "Processing", treatedBy: null, treaterEmail: null },
+    });
+
+    // Uncommit any journal entries for these forms so they return to pending
+    if (staleRefs.length > 0) {
+      await prisma.journalEntry.updateMany({
+        where: { sessionRef: { in: staleRefs }, committed: true },
+        data:  { committed: false },
+      });
+    }
+
+    // Log an audit entry for each reverted submission
+    await prisma.formAuditTrail.createMany({
+      data: stale.map((s) => ({
+        submissionId:  s.id,
+        formReference: s.reference ?? null,
+        prevStatus:    s.status,
+        newStatus:     "Processing",
+        action:        "auto_unassigned",
+        actorName:     "System",
+        actorEmail:    null,
+        note:          `Assignment by ${s.treatedBy ?? "unknown"} expired after 1 hour — returned to Processing. Journal entries uncommitted.`,
+      })),
+    });
+  }
+
   const items = await prisma.formSubmission.findMany({
     where: {
       OR: [
@@ -82,7 +127,21 @@ router.get("/action-items", async (req: AuthRequest, res: Response) => {
     },
     orderBy: { createdAt: "desc" },
   });
-  res.json({ success: true, data: items });
+
+  const refs = items.map((i) => i.reference || i.id);
+  const committedEntries = await prisma.journalEntry.findMany({
+    where: { sessionRef: { in: refs }, committed: true },
+    select: { sessionRef: true },
+    distinct: ["sessionRef"],
+  });
+  const committedRefs = new Set(committedEntries.map((e) => e.sessionRef));
+
+  const itemsWithFlag = items.map((item) => ({
+    ...item,
+    hasCommittedJournal: committedRefs.has(item.reference || item.id),
+  }));
+
+  res.json({ success: true, data: itemsWithFlag });
 });
 
 // ── GET /api/v1/submissions/by-reference/:ref ─────────────────────────────────

@@ -267,6 +267,7 @@ model FormAccess {
 model JournalEntry {
   id           String   @id @default(cuid())
   entryId      String   @unique // "jv1", "jv2"... globally sequential
+  journalId    String?  @db.VarChar(50) // "JE1", "JE2"... grouping ID for saved lines
   committed    Boolean  @default(false) // false = pending (not in global view), true = approved
   sessionRef   String   // Form reference number (e.g. "PCL1") — no FK, plain string
   formName     String   // Copied from form for display/search

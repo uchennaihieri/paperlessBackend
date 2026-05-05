@@ -13,10 +13,16 @@ router.post("/register", async (req: AuthRequest, res: Response) => {
   if (!userEmail) { res.status(401).json({ success: false, error: "Not logged in" }); return; }
 
   const { token, signatureBlob } = req.body;
-  if (!token || token.length !== 8) {
-    res.status(400).json({ success: false, error: "Token must be exactly 8 characters long." });
+  
+  if (!token || token.length < 8) {
+    res.status(400).json({ success: false, error: "Token must be at least 8 characters long." });
     return;
   }
+  if (!/[A-Z]/.test(token) || !/[a-z]/.test(token) || !/[0-9]/.test(token)) {
+    res.status(400).json({ success: false, error: "Token must contain at least one uppercase letter, one lowercase letter, and one number." });
+    return;
+  }
+
   if (!signatureBlob) {
     res.status(400).json({ success: false, error: "Signature blob is required." });
     return;
