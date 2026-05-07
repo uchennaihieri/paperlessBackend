@@ -239,14 +239,19 @@ model PdfTemplateField {
 // Logs identity verification API responses to prevent multiple external API hits within 96 hours
 model IdentityVerificationLog {
   id           String   @id @default(cuid())
+  reference    String   @unique // e.g. "NIN001", "BVN003"
   idType       String   // "bvn" or "nin"
   idNumber     String
+  subjectName  String   @default("") // firstname + lastname at time of check
+  status       String   @default("Verified") // "Verified" | "Failed" | "Partial"
+  pdfPath      String?  // SharePoint path e.g. "checks/NIN/NIN001/report.pdf"
   requestData  Json     // the payload sent (firstname, lastname, etc.)
   responseData Json     // the QoreID response
   verifiedBy   String   // Email of the user who performed it
   createdAt    DateTime @default(now())
 
   @@index([idType, idNumber])
+  @@index([idType])
   @@map("identity_verification_logs")
 }
 
@@ -314,4 +319,27 @@ model LookupValue {
 
   @@unique([type, value])
   @@map("lookup_values")
+}
+
+// Credit Bureau check logs (FirstCentral, CreditRegistry…)
+model CreditBureauLog {
+  id           String   @id @default(cuid())
+  reference    String   @unique          // e.g. "FCB001", "CRB001"
+  bureau       String                   // "firstcentral" | "creditregistry"
+  bvn          String
+  subjectName  String   @default("")    // best-match name from response
+  status       String   @default("Match Found") // "Match Found" | "No Match" | "Failed"
+  matchCount   Int      @default(0)
+  enquiryReason String  @default("Credit Check")
+  productId    Int      @default(45)
+  pdfPath      String?                  // SharePoint path for generated report
+  requestData  Json                     // inputs sent
+  responseData Json                     // match API response
+  reportData   Json?                    // detailed credit report (fetched on demand)
+  verifiedBy   String                   // email of officer
+  createdAt    DateTime @default(now())
+
+  @@index([bureau])
+  @@index([bvn])
+  @@map("credit_bureau_logs")
 }

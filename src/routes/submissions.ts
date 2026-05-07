@@ -5,7 +5,7 @@ import multer from "multer";
 import prisma from "../lib/prisma";
 import { authenticate, AuthRequest } from "../middleware/authenticate";
 import { hashToken, decrypt } from "../lib/crypto";
-import { isSharePointEnabled, uploadToSharePoint } from "../lib/sharepoint";
+import { isSharePointEnabled, uploadToSharePoint, downloadFromSharePoint } from "../lib/sharepoint";
 import { mailer } from "../lib/mailer";
 import { generateSubmissionPdf } from "../lib/pdfGenerator";
 import { checkAndUnblockPrerequisites } from "./workflow";
@@ -276,7 +276,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
   //   uploads/{FORM NAME}/{REFERENCE}/{originalFilename}
   const uploadedFiles = (req.files as Express.Multer.File[]) ?? [];
   const updatedResponses: Record<string, any> = { ...formResponses };
-  
+
   const docCreates: Array<{
     fieldName: string;
     originalName: string;
@@ -285,9 +285,86 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
     size: number;
   }> = [];
 
-  // ── Handle Internal Forms (Custom Forms as Attachments) ─────────────────────
+  const internalAttachments: Record<string, Array<{ isAttachment: true; name: string; url: string }>> = {};
+
   const formFolder = sanitiseFolder(formName);
   const refFolder  = sanitiseFolder(reference);
+
+  // ── Resolve Extended Service Reference fields ──────────────────────────────
+  try {
+    const template = await prisma.formTemplate.findUnique({ where: { id: templateId } });
+    const templateFields: any[] = typeof template?.fields === "string"
+      ? JSON.parse(template.fields) : (template?.fields ?? []);
+
+    for (const field of templateFields) {
+      if ((field as any).type !== "extended_service") continue;
+      const service: string = (field as any).extendedService ?? "";
+      const ref: string = (updatedResponses[field.label] ?? "").toString().trim();
+      if (!ref) continue;
+
+      let originalFilename = "";
+      let pdfPath: string | null = null;
+
+      if (service === "firstcentral" || service === "creditregistry") {
+        const log = await prisma.creditBureauLog.findFirst({
+          where: { reference: ref, bureau: service },
+          select: { pdfPath: true },
+        });
+        if (log?.pdfPath) {
+          pdfPath = log.pdfPath;
+          originalFilename = `${ref}-${service.toUpperCase()}-Report.pdf`;
+        }
+      } else if (service === "nin" || service === "bvn") {
+        const log = await prisma.identityVerificationLog.findFirst({
+          where: { reference: ref, idType: service as any },
+          select: { pdfPath: true },
+        });
+        if (log?.pdfPath) {
+          pdfPath = log.pdfPath;
+          originalFilename = `${ref}-${service.toUpperCase()}-Report.pdf`;
+        }
+      }
+
+      if (pdfPath) {
+        let buf: Buffer;
+        if (isSharePointEnabled()) {
+          const { buffer } = await downloadFromSharePoint(pdfPath);
+          buf = buffer;
+        } else {
+          buf = await fs.readFile(path.join(process.env.UPLOAD_DIR ?? "C:\\Users\\USER\\uploads", pdfPath));
+        }
+
+        let storedPath: string;
+        if (isSharePointEnabled()) {
+          storedPath = await uploadToSharePoint(
+            buf, originalFilename, "application/pdf", `uploads/${formFolder}/${refFolder}`
+          );
+        } else {
+          const uploadDir = process.env.UPLOAD_DIR ?? "C:\\Users\\USER\\uploads";
+          const targetDir = path.join(uploadDir, formFolder, refFolder);
+          await fs.mkdir(targetDir, { recursive: true });
+          const destPath = path.join(targetDir, originalFilename);
+          await fs.writeFile(destPath, buf);
+          storedPath = destPath;
+        }
+
+        docCreates.push({
+          fieldName: field.label,
+          originalName: originalFilename,
+          filePath: storedPath,
+          mimeType: "application/pdf",
+          size: buf.length,
+        });
+
+        if (!internalAttachments[field.label]) internalAttachments[field.label] = [];
+        internalAttachments[field.label].push({ isAttachment: true, name: originalFilename, url: "__pending__" });
+      }
+    }
+  } catch (e) {
+    console.error("[extended_service] Reference resolution failed:", e);
+  }
+
+  // ── Handle Internal Forms (Custom Forms as Attachments) ─────────────────────
   const internalFormTasks: Array<{ fieldName: string, templateId: string, templateName: string, data: any }> = [];
   
   for (const [key, value] of Object.entries(updatedResponses)) {
@@ -303,7 +380,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
     }
   }
 
-  const internalAttachments: Record<string, Array<{ isAttachment: true; name: string; url: string }>> = {};
+
 
   for (const task of internalFormTasks) {
     // 1. Create a Ghost Submission (auto-signed by the logged in user)
@@ -725,7 +802,12 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
     return;
   }
 
-  res.status(201).json({ success: true, data: submission });
+  // Fetch latest submission data
+  const finalSubmission = await prisma.formSubmission.findUnique({
+    where: { id: submission.id },
+    include: { signatories: true, documents: true },
+  });
+  res.status(201).json({ success: true, data: finalSubmission ?? submission });
 });
 
 // ── POST /api/v1/submissions/:id/file-attachments ────────────────────────────

@@ -37,6 +37,7 @@ import prerequisitesRouter from "./routes/prerequisites";
 import formAccessRouter from "./routes/formAccess";
 import journalRouter from "./routes/journal";
 import lookupRouter from "./routes/lookup";
+import creditBureauRouter from "./routes/creditbureau";
 
 const app = express();
 const PORT = process.env.PORT ?? 4000;
@@ -102,6 +103,7 @@ v1.use("/prerequisites", prerequisitesRouter);
 v1.use("/forms-access", formAccessRouter);
 v1.use("/journal", journalRouter);
 v1.use("/lookup", lookupRouter);
+v1.use("/credit-bureau", creditBureauRouter);
 
 
 app.use("/api/v1", v1);
