@@ -89,6 +89,55 @@ router.get("/dynamic-options", async (req, res: Response) => {
   }
 });
 
+// ── GET /api/v1/forms/extended-options ────────────────────────────────────────
+router.get("/extended-options", async (req, res: Response) => {
+  const service = (req.query.service ?? "") as string;
+  if (!service) {
+    res.status(400).json({ success: false, error: "Missing service parameter" });
+    return;
+  }
+
+  try {
+    const options: { value: string, label: string }[] = [];
+
+    if (service === "nin" || service === "bvn") {
+      const logs = await prisma.identityVerificationLog.findMany({
+        where: { idType: service as any },
+        orderBy: { createdAt: "desc" },
+      });
+      for (const log of logs) {
+        const dateStr = log.createdAt.toLocaleString("en-GB", { dateStyle: "short", timeStyle: "short" });
+        const name = log.subjectName || "Unknown";
+        options.push({
+          value: log.reference,
+          label: `${name} - ${log.idNumber || log.reference} - ${dateStr}`,
+        });
+      }
+    } else if (service === "firstcentral" || service === "creditregistry") {
+      const logs = await prisma.creditBureauLog.findMany({
+        where: { bureau: service },
+        orderBy: { createdAt: "desc" },
+      });
+      for (const log of logs) {
+        const dateStr = log.createdAt.toLocaleString("en-GB", { dateStyle: "short", timeStyle: "short" });
+        const name = log.subjectName || "Unknown";
+        options.push({
+          value: log.reference,
+          label: `${name} - ${log.bvn || log.reference} - ${dateStr}`,
+        });
+      }
+    } else {
+      res.status(400).json({ success: false, error: "Invalid service type" });
+      return;
+    }
+
+    res.json({ success: true, data: options });
+  } catch (err) {
+    console.error(`Error fetching extended options for service ${service}:`, err);
+    res.status(500).json({ success: false, error: "Failed to fetch extended options." });
+  }
+});
+
 // ── GET /api/v1/forms/:id ──────────────────────────────────────────────────────
 router.get("/:id", async (req: AuthRequest, res: Response) => {
   const template = await prisma.formTemplate.findUnique({ where: { id: req.params.id } });

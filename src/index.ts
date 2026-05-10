@@ -13,6 +13,7 @@ import { notFound } from "./middleware/notFound";
 // ── Routers
 import authRouter from "./routes/auth";
 import formsRouter from "./routes/forms";
+import listsRouter from "./routes/lists";
 import submissionsRouter from "./routes/submissions";
 import workflowRouter from "./routes/workflow";
 import securityRouter from "./routes/security";
@@ -38,6 +39,7 @@ import formAccessRouter from "./routes/formAccess";
 import journalRouter from "./routes/journal";
 import lookupRouter from "./routes/lookup";
 import creditBureauRouter from "./routes/creditbureau";
+import listsRouter from "./routes/lists";
 
 const app = express();
 const PORT = process.env.PORT ?? 4000;
@@ -79,6 +81,7 @@ app.get("/health", (_req, res) =>
 const v1 = express.Router();
 v1.use("/auth", authRouter);
 v1.use("/forms", formsRouter);
+v1.use("/lists", listsRouter);
 v1.use("/submissions", submissionsRouter);
 v1.use("/workflow", workflowRouter);
 v1.use("/security", securityRouter);
