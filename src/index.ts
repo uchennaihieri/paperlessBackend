@@ -39,7 +39,6 @@ import formAccessRouter from "./routes/formAccess";
 import journalRouter from "./routes/journal";
 import lookupRouter from "./routes/lookup";
 import creditBureauRouter from "./routes/creditbureau";
-import listsRouter from "./routes/lists";
 
 const app = express();
 const PORT = process.env.PORT ?? 4000;
