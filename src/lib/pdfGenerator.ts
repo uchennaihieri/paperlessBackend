@@ -351,3 +351,113 @@ export async function generateSubmissionPdf(id: string): Promise<{ buffer: Buffe
 
   return { buffer: Buffer.from(pdfBuffer), filename };
 }
+
+export async function getContractPreviewHtml(contractRequestId: string): Promise<string | null> {
+  const contract = await prisma.contractRequest.findUnique({
+    where: { id: contractRequestId },
+    include: {
+      submission: {
+        include: {
+          submittedBy: true,
+          template: { include: { pdfTemplate: true } },
+          signatories: true
+        }
+      }
+    }
+  });
+
+  if (!contract) return null;
+
+  const pdfTemplate = await prisma.pdfTemplate.findUnique({
+    where: { id: contract.templateId },
+    include: { fields: true }
+  });
+
+  if (!pdfTemplate || pdfTemplate.type !== "html" || !pdfTemplate.sharepointPath) {
+    return null;
+  }
+
+  const fileData = await downloadFromSharePoint(pdfTemplate.sharepointPath);
+  if (!fileData || !fileData.buffer) return null;
+  const htmlSource = fileData.buffer.toString("utf-8");
+
+  const unified = await buildUnifiedContext(contract.submission, {});
+  // Resolve mapped fields
+  for (const field of (pdfTemplate as any).fields || []) {
+    if (!field.mappingPath) continue;
+    if (field.mappingPath === "FormInput") continue;
+    unified[field.name] = resolveContextPath(field.mappingPath, unified);
+  }
+
+  // Empty signature to preview how it looks before signing
+  unified.ContractSignature = "";
+  unified.ContractSelfie = "";
+  unified.ContractDate = new Date().toLocaleDateString("en-GB");
+
+  const compiled = Handlebars.compile(htmlSource);
+  return compiled(unified);
+}
+
+export async function generateContractPdf(contractRequestId: string, drawnSignatureBase64: string, selfieBase64: string) {
+  const contract = await prisma.contractRequest.findUnique({
+    where: { id: contractRequestId },
+    include: {
+      submission: {
+        include: {
+          submittedBy: true,
+          template: { include: { pdfTemplate: true } },
+          signatories: true
+        }
+      }
+    }
+  });
+
+  if (!contract) return null;
+
+  const pdfTemplate = await prisma.pdfTemplate.findUnique({
+    where: { id: contract.templateId },
+    include: { fields: true }
+  });
+
+  if (!pdfTemplate || pdfTemplate.type !== "html" || !pdfTemplate.sharepointPath) {
+    return null;
+  }
+
+  const fileData = await downloadFromSharePoint(pdfTemplate.sharepointPath);
+  if (!fileData || !fileData.buffer) return null;
+  const htmlSource = fileData.buffer.toString("utf-8");
+
+  const unified = await buildUnifiedContext(contract.submission, {});
+  // Resolve mapped fields
+  for (const field of (pdfTemplate as any).fields || []) {
+    if (!field.mappingPath) continue;
+    if (field.mappingPath === "FormInput") continue;
+    unified[field.name] = resolveContextPath(field.mappingPath, unified);
+  }
+
+  unified.ContractSignature = drawnSignatureBase64;
+  unified.ContractSelfie = selfieBase64;
+  unified.ContractDate = contract.signedAt ? new Date(contract.signedAt).toLocaleDateString("en-GB") : new Date().toLocaleDateString("en-GB");
+
+  const compiled = Handlebars.compile(htmlSource);
+  const html = compiled(unified);
+
+  let browser;
+  try {
+    browser = await puppeteer.launch({ 
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
+  } catch (e) {
+    browser = await puppeteer.launch({ headless: true, channel: "chrome" });
+  }
+
+  const page = await browser.newPage();
+  await page.setContent(html, { waitUntil: "networkidle0" });
+  const pdfBuffer = await page.pdf({ format: "A4", printBackground: true });
+  await browser.close();
+
+  const filename = `${contract.submission.formName.replace(/[^a-zA-Z0-9]/g, "_")}_Contract_${contract.id.slice(-6)}.pdf`;
+  return { buffer: Buffer.from(pdfBuffer), filename };
+}
+

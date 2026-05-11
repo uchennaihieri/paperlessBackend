@@ -172,7 +172,7 @@ router.get("/:id", async (req: AuthRequest, res: Response) => {
 
 // ── POST /api/v1/forms ─────────────────────────────────────────────────────────
 router.post("/", requireAdmin as any, async (req: AuthRequest, res: Response) => {
-  const { name, description, fields, formOwner, formTreater, htmlTemplate, pdfGeneratorType, pdfTemplateId, mobileEnabled, accountServicesEnabled, isInternal } = req.body;
+  const { name, description, fields, formOwner, formTreater, htmlTemplate, pdfGeneratorType, pdfTemplateId, mobileEnabled, accountServicesEnabled, isInternal, needsContract, contractTemplateId } = req.body;
   try {
     const template = await prisma.formTemplate.create({
       data: {
@@ -187,6 +187,8 @@ router.post("/", requireAdmin as any, async (req: AuthRequest, res: Response) =>
         htmlTemplate: htmlTemplate ?? null,
         pdfGeneratorType: pdfGeneratorType ?? "none",
         pdfTemplateId: pdfTemplateId || null,
+        needsContract: needsContract ?? false,
+        contractTemplateId: contractTemplateId || null,
       },
     });
     res.status(201).json({ success: true, data: template });
@@ -202,7 +204,7 @@ router.post("/", requireAdmin as any, async (req: AuthRequest, res: Response) =>
 
 // ── PATCH /api/v1/forms/:id ───────────────────────────────────────────────────
 router.patch("/:id", requireAdmin as any, async (req: AuthRequest, res: Response) => {
-  const { name, description, fields, formOwner, formTreater, htmlTemplate, pdfGeneratorType, pdfTemplateId, mobileEnabled, accountServicesEnabled, isInternal } = req.body;
+  const { name, description, fields, formOwner, formTreater, htmlTemplate, pdfGeneratorType, pdfTemplateId, mobileEnabled, accountServicesEnabled, isInternal, needsContract, contractTemplateId } = req.body;
   try {
     const template = await prisma.formTemplate.update({
       where: { id: req.params.id },
@@ -218,6 +220,8 @@ router.patch("/:id", requireAdmin as any, async (req: AuthRequest, res: Response
         htmlTemplate: htmlTemplate ?? null,
         pdfGeneratorType: pdfGeneratorType ?? "none",
         pdfTemplateId: pdfTemplateId || null,
+        needsContract: needsContract ?? false,
+        contractTemplateId: contractTemplateId || null,
       },
     });
     res.json({ success: true, data: template });

@@ -53,6 +53,8 @@ model FormTemplate {
   pdfGeneratorType String @default("none") // "none", "document", "html"
   pdfTemplateId    String?
   pdfTemplate      PdfTemplate? @relation(fields: [pdfTemplateId], references: [id])
+  needsContract    Boolean @default(false)
+  contractTemplateId String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   submissions FormSubmission[]
@@ -81,6 +83,7 @@ model FormSubmission {
   auditTrail     FormAuditTrail[]
   prerequisites      SubmissionPrerequisite[] @relation("MainSubmission")
   prerequisiteFor    SubmissionPrerequisite?  @relation("PrereqSubmission")
+  contractRequests   ContractRequest[]
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt
 }
@@ -354,4 +357,19 @@ model ReusableList {
   updatedAt   DateTime @updatedAt
 
   @@map("reusable_lists")
+}
+
+model ContractRequest {
+  id             String   @id @default(cuid())
+  submissionId   String
+  submission     FormSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  templateId     String   // The HTML PDF template for the contract
+  submitterEmail String   
+  status         String   @default("Pending") // Pending, Signed
+  signedAt       DateTime?
+  signatureToken String?
+  pdfPath        String?  // SharePoint path of the finalized, signed contract
+  createdAt      DateTime @default(now())
+  
+  @@map("contract_requests")
 }

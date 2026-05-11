@@ -124,6 +124,7 @@ router.get("/action-items", async (req: AuthRequest, res: Response) => {
       template: { select: { name: true, formOwner: true, formTreater: true } },
       signatories: { orderBy: { position: "asc" } },
       submittedBy: { select: { user_name: true, finca_email: true, branch: true } },
+      documents: true,
     },
     orderBy: { createdAt: "desc" },
   });
@@ -171,11 +172,14 @@ router.get("/:id", async (req, res: Response) => {
       signatories: { orderBy: { position: "asc" } },
       template: true,
       submittedBy: { select: { user_name: true, finca_email: true, branch: true } },
+      documents: true,
+      contractRequests: true,
     },
   });
   if (!submission) { res.status(404).json({ success: false, error: "Submission not found" }); return; }
   res.json({ success: true, data: submission });
 });
+
 
 
 // ── POST /api/v1/submissions ──────────────────────────────────────────────────

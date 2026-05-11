@@ -55,10 +55,41 @@ router.get("/", async (req: Request, res: Response) => {
 });
 
 // GET /api/v1/templates/data-dictionary
-// Returns the canonical data dictionary without touching SharePoint.
+// Returns the canonical data dictionary plus any custom fields from linked FormTemplates.
 // Must be registered BEFORE /:id to avoid Express treating "data-dictionary" as an id param.
-router.get("/data-dictionary", (_req: Request, res: Response) => {
-  res.json({ success: true, data: DATA_DICTIONARY });
+router.get("/data-dictionary", async (req: Request, res: Response) => {
+  const templateId = req.query.templateId as string | undefined;
+  let dynamicDict: typeof DATA_DICTIONARY = [];
+
+  if (templateId) {
+    try {
+      const formTemplates = await prisma.formTemplate.findMany({
+        where: {
+          OR: [
+            { pdfTemplateId: templateId },
+            { contractTemplateId: templateId }
+          ]
+        }
+      });
+
+      for (const ft of formTemplates) {
+        const fields = (ft.fields as any[]) || [];
+        for (const f of fields) {
+          if (f.label) {
+            dynamicDict.push({
+              category: `Form Input: ${ft.name}`,
+              path: `Responses.${f.label}`,
+              label: f.label
+            });
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Error fetching dynamic dictionary fields:", err);
+    }
+  }
+
+  res.json({ success: true, data: [...DATA_DICTIONARY, ...dynamicDict] });
 });
 
 // POST /api/v1/templates

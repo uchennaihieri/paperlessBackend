@@ -123,6 +123,7 @@ router.get("/queue", async (req: AuthRequest, res: Response) => {
       include: {
         signatories: { orderBy: { position: "asc" } },
         submittedBy: { select: { user_name: true, finca_email: true, branch: true } },
+        documents: true,
         prerequisites: {
           include: {
             targetForm: { select: { name: true } },
@@ -140,6 +141,7 @@ router.get("/queue", async (req: AuthRequest, res: Response) => {
       include: {
         signatories: { orderBy: { position: "asc" } },
         submittedBy: { select: { user_name: true, finca_email: true, branch: true } },
+        documents: true,
         prerequisites: {
           include: {
             targetForm: { select: { name: true } },
@@ -193,6 +195,8 @@ router.get("/submissions/:id", async (req, res: Response) => {
       signatories: { orderBy: { position: "asc" } },
       template: true,
       submittedBy: { select: { user_name: true, finca_email: true, branch: true } },
+      contractRequests: true,
+      documents: true,
     },
   });
   if (!sub) { res.status(404).json({ success: false, error: "Not found" }); return; }
@@ -208,8 +212,26 @@ router.post("/:id/assign-self", async (req: AuthRequest, res: Response) => {
 
   const current = await prisma.formSubmission.findUnique({
     where: { id: req.params.id },
-    select: { status: true, reference: true },
+    select: { 
+      status: true, 
+      reference: true,
+      template: { select: { needsContract: true } },
+      contractRequests: { select: { status: true } }
+    },
   });
+
+  if (!current) {
+    res.status(404).json({ success: false, error: "Submission not found." });
+    return;
+  }
+
+  if (current.template?.needsContract) {
+    const hasSignedContract = current.contractRequests.some((c: any) => c.status === "Signed");
+    if (!hasSignedContract) {
+      res.status(400).json({ success: false, error: "Awaiting signed contract from submitter." });
+      return;
+    }
+  }
 
   await prisma.formSubmission.update({
     where: { id: req.params.id },
@@ -633,7 +655,12 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
 
   const currentForSign = await prisma.formSubmission.findUnique({
     where: { id: req.params.id },
-    select: { status: true, reference: true },
+    select: { 
+      status: true, 
+      reference: true,
+      template: { select: { needsContract: true, contractTemplateId: true } },
+      submittedBy: { select: { finca_email: true } }
+    },
   });
 
   const signerUser = await prisma.user.findFirst({
@@ -665,6 +692,16 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
 
   // ── Background: generate + store the PDF once all signers are done ─────────
   if (unsigned === 0) {
+    if (currentForSign?.template?.needsContract && currentForSign.template.contractTemplateId && currentForSign.submittedBy?.finca_email) {
+      await prisma.contractRequest.create({
+        data: {
+          submissionId: req.params.id,
+          templateId: currentForSign.template.contractTemplateId,
+          submitterEmail: currentForSign.submittedBy.finca_email,
+        }
+      });
+    }
+
     checkAndUnblockPrerequisites(req.params.id);
     setImmediate(async () => {
       try {
