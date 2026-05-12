@@ -39,7 +39,6 @@ import formAccessRouter from "./routes/formAccess";
 import journalRouter from "./routes/journal";
 import lookupRouter from "./routes/lookup";
 import creditBureauRouter from "./routes/creditbureau";
-import listsRouter from "./routes/lists";
 import contractsRouter from "./routes/contracts";
 
 const app = express();
