@@ -2,18 +2,21 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# Install system dependencies (needed for Prisma on Alpine)
+# System deps (important for Prisma + Puppeteer)
 RUN apk add --no-cache openssl libc6-compat
 
-# Install dependencies first (better caching)
+# Install dependencies
 COPY package*.json ./
 RUN npm install
 
-# Copy full project (INCLUDING prisma schema)
+# Copy full source
 COPY . .
 
-# Generate Prisma client AFTER schema is available
+# Generate Prisma client
 RUN npx prisma generate
+
+# BUILD TYPESCRIPT
+RUN npm run build
 
 EXPOSE 5000
 
