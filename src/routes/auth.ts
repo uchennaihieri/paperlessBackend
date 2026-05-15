@@ -160,7 +160,7 @@ router.post("/verify-otp", async (req: Request, res: Response) => {
     return;
   }
 
-  const isSystemAdmin = userRoles.some((r: any) => 
+  const isSystemAdmin = userRoles.some((r: any) =>
     r.user_role?.toLowerCase() === "administrator" || r.specialAccess?.toLowerCase().includes("administrator")
   );
   if (userRoles.length > 1 && !isSystemAdmin) {
@@ -321,7 +321,7 @@ router.post("/set-password", authenticate as any, requireAdmin as any, async (re
     const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
     try {
       await mailer.sendMail({
-        from: `Paperless <${process.env.SMTP_USER}>`,
+        from: `Paperless <${process.env.SMTP_FROM}>`,
         to: targetUser.finca_email,
         subject: "Paperless – Your Password Has Been Reset",
         html: `
@@ -397,9 +397,9 @@ router.patch("/devices/:id", authenticate as any, requireAdmin as any, async (re
           <p>Hi <strong>${device.user.user_name ?? "User"}</strong>,</p>
           <p>Your device registration has been <strong>${status === "Approved" ? "✅ approved" : "❌ rejected"}</strong>.</p>
           ${status === "Approved"
-            ? "<p>You can now log in to Paperless from this device.</p>"
-            : "<p>Contact your administrator if you believe this is a mistake.</p>"
-          }
+          ? "<p>You can now log in to Paperless from this device.</p>"
+          : "<p>Contact your administrator if you believe this is a mistake.</p>"
+        }
         </div>
       `,
     }).catch((e: any) => console.error("[device email]", e));

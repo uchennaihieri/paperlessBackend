@@ -48,12 +48,12 @@ router.get("/", async (_req, res: Response) => {
 router.get("/my", async (req: AuthRequest, res: Response) => {
   if (!req.user?.id) { res.status(401).json({ success: false, error: "Unauthenticated" }); return; }
   const submissions = await prisma.formSubmission.findMany({
-    where: { 
+    where: {
       submittedById: req.user.id,
       status: { notIn: ["Internal Attachment", "Not Approved"] }
     },
     orderBy: { createdAt: "desc" },
-    include: { 
+    include: {
       signatories: { orderBy: { position: "asc" } },
       template: { select: { mobileEnabled: true } }
     },
@@ -81,7 +81,7 @@ router.get("/action-items", async (req: AuthRequest, res: Response) => {
   });
 
   if (stale.length > 0) {
-    const staleIds  = stale.map((s) => s.id);
+    const staleIds = stale.map((s) => s.id);
     const staleRefs = stale.map((s) => s.reference).filter(Boolean) as string[];
 
     await prisma.formSubmission.updateMany({
@@ -93,21 +93,21 @@ router.get("/action-items", async (req: AuthRequest, res: Response) => {
     if (staleRefs.length > 0) {
       await prisma.journalEntry.updateMany({
         where: { sessionRef: { in: staleRefs }, committed: true },
-        data:  { committed: false },
+        data: { committed: false },
       });
     }
 
     // Log an audit entry for each reverted submission
     await prisma.formAuditTrail.createMany({
       data: stale.map((s) => ({
-        submissionId:  s.id,
+        submissionId: s.id,
         formReference: s.reference ?? null,
-        prevStatus:    s.status,
-        newStatus:     "Processing",
-        action:        "auto_unassigned",
-        actorName:     "System",
-        actorEmail:    null,
-        note:          `Assignment by ${s.treatedBy ?? "unknown"} expired after 1 hour — returned to Processing. Journal entries uncommitted.`,
+        prevStatus: s.status,
+        newStatus: "Processing",
+        action: "auto_unassigned",
+        actorName: "System",
+        actorEmail: null,
+        note: `Assignment by ${s.treatedBy ?? "unknown"} expired after 1 hour — returned to Processing. Journal entries uncommitted.`,
       })),
     });
   }
@@ -153,7 +153,7 @@ router.get("/by-reference/:ref", async (req, res: Response) => {
     where: { reference: req.params.ref },
     include: {
       signatories: { orderBy: { position: "asc" } },
-      template:    true,
+      template: true,
       submittedBy: { select: { user_name: true, finca_email: true, branch: true } },
     },
   });
@@ -250,7 +250,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
         orderBy: { createdAt: 'desc' },
         select: { reference: true }
       });
-      
+
       let nextNumber = 1;
       if (latestSub && latestSub.reference) {
         const match = latestSub.reference.match(/\d+$/);
@@ -292,7 +292,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
   const internalAttachments: Record<string, Array<{ isAttachment: true; name: string; url: string }>> = {};
 
   const formFolder = sanitiseFolder(formName);
-  const refFolder  = sanitiseFolder(reference);
+  const refFolder = sanitiseFolder(reference);
 
   // ── Resolve Extended Service Reference fields ──────────────────────────────
   try {
@@ -370,7 +370,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
 
   // ── Handle Internal Forms (Custom Forms as Attachments) ─────────────────────
   const internalFormTasks: Array<{ fieldName: string, templateId: string, templateName: string, data: any }> = [];
-  
+
   for (const [key, value] of Object.entries(updatedResponses)) {
     if (value && typeof value === "object" && value.type === "internal_form") {
       internalFormTasks.push({
@@ -457,7 +457,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
 
   if (uploadedFiles.length > 0) {
     const formFolder = sanitiseFolder(formName);   // e.g. "PETTY CASH LIVE"
-    const refFolder  = sanitiseFolder(reference);  // e.g. "PCL1"
+    const refFolder = sanitiseFolder(reference);  // e.g. "PCL1"
 
     // Group by fieldname so we can build the attachment array per field
     const byField: Record<string, Express.Multer.File[]> = {};
@@ -495,9 +495,9 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
         docCreates.push({
           fieldName,
           originalName: file.originalname,
-          filePath:     storedPath,
-          mimeType:     file.mimetype || "application/octet-stream",
-          size:         file.size,
+          filePath: storedPath,
+          mimeType: file.mimetype || "application/octet-stream",
+          size: file.size,
         });
 
         // Placeholder URL — will be filled in after we have the document ID below
@@ -531,12 +531,12 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
         status: initialStatus, // Use dynamic initial status
         signatories: {
           create: sigsInput.map((s) => ({
-            position:      s.position,
-            userName:      s.userName,
-            email:         s.email,
-            status:        s.position === 1 && finalSignatureStatus === "Signed" ? "Signed" : "Pending",
+            position: s.position,
+            userName: s.userName,
+            email: s.email,
+            status: s.position === 1 && finalSignatureStatus === "Signed" ? "Signed" : "Pending",
             signatureData: s.position === 1 ? finalSignatureData : null,
-            signedAt:      s.position === 1 && finalSignatureStatus === "Signed" ? finalSignedAt : null,
+            signedAt: s.position === 1 && finalSignatureStatus === "Signed" ? finalSignedAt : null,
           })),
         },
       },
@@ -561,12 +561,12 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
         status: initialStatus, // Use dynamic initial status
         signatories: {
           create: sigsInput.map((s) => ({
-            position:      s.position,
-            userName:      s.userName,
-            email:         s.email,
-            status:        s.position === 1 && finalSignatureStatus === "Signed" ? "Signed" : "Pending",
+            position: s.position,
+            userName: s.userName,
+            email: s.email,
+            status: s.position === 1 && finalSignatureStatus === "Signed" ? "Signed" : "Pending",
             signatureData: s.position === 1 ? finalSignatureData : null,
-            signedAt:      s.position === 1 && finalSignatureStatus === "Signed" ? finalSignedAt : null,
+            signedAt: s.position === 1 && finalSignatureStatus === "Signed" ? finalSignedAt : null,
           })),
         },
       },
@@ -577,14 +577,14 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
   // ── Audit: record initial submission event ──
   prisma.formAuditTrail.create({
     data: {
-      submissionId:  submission.id,
+      submissionId: submission.id,
       formReference: submission.reference,
-      prevStatus:    "",
-      newStatus:     initialStatus,
-      action:        "submitted",
-      actorName:     req.user?.user_name ?? req.user?.email ?? null,
-      actorEmail:    req.user?.email ?? null,
-      note:          `Form: ${formName}`,
+      prevStatus: "",
+      newStatus: initialStatus,
+      action: "submitted",
+      actorName: req.user?.user_name ?? req.user?.email ?? null,
+      actorEmail: req.user?.email ?? null,
+      note: `Form: ${formName}`,
     },
   }).catch((e: any) => console.error("[audit] submit:", e));
 
@@ -597,7 +597,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
         if (!pdfResult) return;
 
         const formFolder = submission.formName.replace(/[\\/:*?"<>|]/g, "").trim().toUpperCase();
-        const refFolder  = submission.reference?.replace(/[\\/:*?"<>|]/g, "").trim().toUpperCase() || submission.id.slice(-6).toUpperCase();
+        const refFolder = submission.reference?.replace(/[\\/:*?"<>|]/g, "").trim().toUpperCase() || submission.id.slice(-6).toUpperCase();
         let storedPath = "";
 
         if (isSharePointEnabled()) {
@@ -618,11 +618,11 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
           const created = await prisma.submissionDocument.create({
             data: {
               submissionId: submission.id,
-              fieldName:    "CompletedFormPDF",
+              fieldName: "CompletedFormPDF",
               originalName: pdfResult.filename,
-              filePath:     storedPath,
-              mimeType:     "application/pdf",
-              size:         pdfResult.buffer.length,
+              filePath: storedPath,
+              mimeType: "application/pdf",
+              size: pdfResult.buffer.length,
             },
           });
 
@@ -632,7 +632,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
           ];
           await prisma.formSubmission.update({
             where: { id: submission.id },
-            data:  { formResponses: resData },
+            data: { formResponses: resData },
           });
           console.info(`[pdf] Generated and stored: ${pdfResult.filename}`);
         }
@@ -694,12 +694,12 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
         const prereqRef = `${acronym}${nextNumber}`;
 
         // Auto-populate form reference if a field exists
-        const targetFields: any[] = typeof targetTemplate.fields === "string" 
-          ? JSON.parse(targetTemplate.fields) 
+        const targetFields: any[] = typeof targetTemplate.fields === "string"
+          ? JSON.parse(targetTemplate.fields)
           : (targetTemplate.fields || []);
-          
+
         const prefilledResponses: Record<string, any> = {};
-        const refField = targetFields.find((f: any) => 
+        const refField = targetFields.find((f: any) =>
           f.type !== "section_header" && f.type !== "instructions" && f.label.toLowerCase().includes("form reference")
         );
         if (refField) {
@@ -733,7 +733,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
         const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
         const fillUrl = `${appUrl}/dashboard/forms/draft/${prereqSub.id}`;
         mailer.sendMail({
-          from: `Paperless <${process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
+          from: `Paperless <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
           to: targetEmail,
           subject: `Action Required: Please complete the "${targetTemplate.name}" form`,
           html: `

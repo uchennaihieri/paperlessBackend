@@ -50,7 +50,7 @@ router.get("/public/:prereqSubmissionId", async (req, res: Response) => {
 // Sends a reminder email to the target email of a pending prerequisite.
 router.post("/:id/remind", async (req: AuthRequest, res: Response) => {
   const prereqId = req.params.id;
-  
+
   const prereq = await prisma.submissionPrerequisite.findUnique({
     where: { id: prereqId },
     include: {
@@ -77,9 +77,9 @@ router.post("/:id/remind", async (req: AuthRequest, res: Response) => {
   try {
     const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
     const fillUrl = `${appUrl}/dashboard/forms/draft/${prereq.prereqSubmission.id}`;
-    
+
     await mailer.sendMail({
-      from: `Paperless <${process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
+      from: `Paperless <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
       to: prereq.targetEmail,
       subject: `Reminder: Please complete the "${prereq.targetForm.name}" form`,
       html: `

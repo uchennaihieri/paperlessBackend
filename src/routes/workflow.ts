@@ -65,12 +65,12 @@ export async function checkAndUnblockPrerequisites(prereqSubmissionId: string) {
         });
 
         await logAudit({
-          submissionId:  prereqLink.mainSubmissionId,
+          submissionId: prereqLink.mainSubmissionId,
           formReference: mainSub.reference,
-          prevStatus:    "Blocked - Awaiting Prerequisites",
-          newStatus:     "Submitted",
-          action:        "unblocked",
-          note:          "All prerequisite forms approved. Submission is now active.",
+          prevStatus: "Blocked - Awaiting Prerequisites",
+          newStatus: "Submitted",
+          action: "unblocked",
+          note: "All prerequisite forms approved. Submission is now active.",
         });
 
         // Notify the first signatory
@@ -78,7 +78,7 @@ export async function checkAndUnblockPrerequisites(prereqSubmissionId: string) {
         if (firstSig) {
           const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
           mailer.sendMail({
-            from: `Paperless <${process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
+            from: `Paperless <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
             to: firstSig.email,
             subject: `Action Required: "${mainSub.formName}" is now ready for your signature`,
             html: `
@@ -206,14 +206,14 @@ router.get("/submissions/:id", async (req, res: Response) => {
 // ── POST /api/v1/workflow/:id/assign-self ─────────────────────────────────────
 router.post("/:id/assign-self", async (req: AuthRequest, res: Response) => {
   const userName = req.user?.user_name ?? req.user?.email ?? "Unknown";
-  const email     = req.user?.email ?? null;
+  const email = req.user?.email ?? null;
   const firstName = userName.split(" ")[0];
   const newStatus = `Assigned to ${firstName}`;
 
   const current = await prisma.formSubmission.findUnique({
     where: { id: req.params.id },
-    select: { 
-      status: true, 
+    select: {
+      status: true,
       reference: true,
       template: { select: { needsContract: true } },
       contractRequests: { select: { status: true } }
@@ -239,13 +239,13 @@ router.post("/:id/assign-self", async (req: AuthRequest, res: Response) => {
   });
 
   await logAudit({
-    submissionId:  req.params.id,
+    submissionId: req.params.id,
     formReference: current?.reference,
-    prevStatus:    current?.status ?? "",
+    prevStatus: current?.status ?? "",
     newStatus,
-    action:        "assigned",
-    actorName:     userName,
-    actorEmail:    email,
+    action: "assigned",
+    actorName: userName,
+    actorEmail: email,
   });
 
   res.json({ success: true, newStatus });
@@ -288,13 +288,13 @@ router.patch("/:id/revert-assignment", async (req: AuthRequest, res: Response) =
   });
 
   await logAudit({
-    submissionId:  req.params.id,
+    submissionId: req.params.id,
     formReference: current.reference,
-    prevStatus:    current.status,
-    newStatus:     "Processing",
-    action:        "assignment_reverted",
-    actorEmail:    email,
-    note:          "Assignee reverted self-assignment — returned to Processing",
+    prevStatus: current.status,
+    newStatus: "Processing",
+    action: "assignment_reverted",
+    actorEmail: email,
+    note: "Assignee reverted self-assignment — returned to Processing",
   });
 
   res.json({ success: true, newStatus: "Processing" });
@@ -356,14 +356,14 @@ router.post("/:id/complete", async (req: AuthRequest, res: Response) => {
       data: { status: "Completed", approvedBy: "None", approverEmail: null },
     });
     await logAudit({
-      submissionId:  req.params.id,
+      submissionId: req.params.id,
       formReference: current?.reference,
-      prevStatus:    current?.status ?? "",
-      newStatus:     "Completed",
-      action:        "completed",
-      actorName:     treaterName,
-      actorEmail:    email,
-      note:          "Completed without further approval",
+      prevStatus: current?.status ?? "",
+      newStatus: "Completed",
+      action: "completed",
+      actorName: treaterName,
+      actorEmail: email,
+      note: "Completed without further approval",
     });
   } else {
     // Routing to a final approver
@@ -376,14 +376,14 @@ router.post("/:id/complete", async (req: AuthRequest, res: Response) => {
       },
     });
     await logAudit({
-      submissionId:  req.params.id,
+      submissionId: req.params.id,
       formReference: current?.reference,
-      prevStatus:    current?.status ?? "",
-      newStatus:     "Awaiting Final Approval",
-      action:        "routed_for_approval",
-      actorName:     treaterName,
-      actorEmail:    email,
-      note:          `Routed to ${approverName ?? approverEmail} (${approverEmail})`,
+      prevStatus: current?.status ?? "",
+      newStatus: "Awaiting Final Approval",
+      action: "routed_for_approval",
+      actorName: treaterName,
+      actorEmail: email,
+      note: `Routed to ${approverName ?? approverEmail} (${approverEmail})`,
     });
   }
   res.json({ success: true });
@@ -445,20 +445,20 @@ router.post("/:id/approve", async (req: AuthRequest, res: Response) => {
   });
 
   await logAudit({
-    submissionId:  req.params.id,
+    submissionId: req.params.id,
     formReference: currentForApprove?.reference,
-    prevStatus:    currentForApprove?.status ?? "",
-    newStatus:     "Completed",
-    action:        "approved",
-    actorName:     approverName,
-    actorEmail:    email,
+    prevStatus: currentForApprove?.status ?? "",
+    newStatus: "Completed",
+    action: "approved",
+    actorName: approverName,
+    actorEmail: email,
   });
 
   // Commit all pending journal entries for this submission's reference
   if (currentForApprove?.reference) {
     await prisma.journalEntry.updateMany({
       where: { sessionRef: currentForApprove.reference, committed: false },
-      data:  { committed: true },
+      data: { committed: true },
     });
   }
 
@@ -499,21 +499,21 @@ router.post("/:id/decline-final", async (req: AuthRequest, res: Response) => {
   });
 
   await logAudit({
-    submissionId:  req.params.id,
+    submissionId: req.params.id,
     formReference: sub.reference ?? null,
-    prevStatus:    "Awaiting Final Approval",
-    newStatus:     "Processing",
-    action:        "final_declined",
-    actorName:     declinedFinalName,
-    actorEmail:    email,
-    note:          "Final approver returned — returned to Processing",
+    prevStatus: "Awaiting Final Approval",
+    newStatus: "Processing",
+    action: "final_declined",
+    actorName: declinedFinalName,
+    actorEmail: email,
+    note: "Final approver returned — returned to Processing",
   });
 
   // Uncommit journal entries — approver returned the form, entries revert to pending
   if (sub.reference) {
     await prisma.journalEntry.updateMany({
       where: { sessionRef: sub.reference },
-      data:  { committed: false },
+      data: { committed: false },
     });
   }
 
@@ -558,21 +558,21 @@ router.post("/:id/disapprove-final", async (req: AuthRequest, res: Response) => 
   });
 
   await logAudit({
-    submissionId:  req.params.id,
+    submissionId: req.params.id,
     formReference: sub.reference ?? null,
-    prevStatus:    "Awaiting Final Approval",
-    newStatus:     "Not Approved",
-    action:        "final_disapproved",
-    actorName:     disapprovedFinalName,
-    actorEmail:    email,
-    note:          reason.trim(),
+    prevStatus: "Awaiting Final Approval",
+    newStatus: "Not Approved",
+    action: "final_disapproved",
+    actorName: disapprovedFinalName,
+    actorEmail: email,
+    note: reason.trim(),
   });
 
   // Uncommit journal entries
   if (sub.reference) {
     await prisma.journalEntry.updateMany({
       where: { sessionRef: sub.reference },
-      data:  { committed: false },
+      data: { committed: false },
     });
   }
 
@@ -580,7 +580,7 @@ router.post("/:id/disapprove-final", async (req: AuthRequest, res: Response) => 
   if (sub.submittedBy?.finca_email) {
     const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
     mailer.sendMail({
-      from: `Paperless <${process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
+      from: `Paperless <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
       to: sub.submittedBy.finca_email,
       subject: `Submission Disapproved: "${sub.formName}"`,
       html: `
@@ -655,8 +655,8 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
 
   const currentForSign = await prisma.formSubmission.findUnique({
     where: { id: req.params.id },
-    select: { 
-      status: true, 
+    select: {
+      status: true,
       reference: true,
       template: { select: { needsContract: true, contractTemplateId: true } },
       submittedBy: { select: { finca_email: true } }
@@ -677,14 +677,14 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
   });
 
   await logAudit({
-    submissionId:  req.params.id,
+    submissionId: req.params.id,
     formReference: currentForSign?.reference,
-    prevStatus:    currentForSign?.status ?? "",
-    newStatus:     newSignStatus,
-    action:        "signed",
-    actorName:     signerName,
-    actorEmail:    email,
-    note:          unsigned === 0 ? "Last signature — all signers complete" : `${unsigned} signature(s) still pending`,
+    prevStatus: currentForSign?.status ?? "",
+    newStatus: newSignStatus,
+    action: "signed",
+    actorName: signerName,
+    actorEmail: email,
+    note: unsigned === 0 ? "Last signature — all signers complete" : `${unsigned} signature(s) still pending`,
   });
 
   // ── Respond immediately — signer should never wait for PDF/SharePoint ─────
@@ -709,8 +709,8 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
         if (!pdfResult) return;
 
         const formFolder = updatedSubmission.formName.replace(/[\\/:*?"<>|]/g, "").trim().toUpperCase();
-        const refFolder  = updatedSubmission.reference?.replace(/[\\/:*?"<>|]/g, "").trim().toUpperCase()
-                           || updatedSubmission.id.slice(-6).toUpperCase();
+        const refFolder = updatedSubmission.reference?.replace(/[\\/:*?"<>|]/g, "").trim().toUpperCase()
+          || updatedSubmission.id.slice(-6).toUpperCase();
         let storedPath = "";
 
         if (isSharePointEnabled()) {
@@ -724,11 +724,11 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
           const created = await prisma.submissionDocument.create({
             data: {
               submissionId: updatedSubmission.id,
-              fieldName:    "CompletedFormPDF",
+              fieldName: "CompletedFormPDF",
               originalName: pdfResult.filename,
-              filePath:     storedPath,
-              mimeType:     "application/pdf",
-              size:         pdfResult.buffer.length,
+              filePath: storedPath,
+              mimeType: "application/pdf",
+              size: pdfResult.buffer.length,
             },
           });
 
@@ -738,7 +738,7 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
           ];
           await prisma.formSubmission.update({
             where: { id: req.params.id },
-            data:  { formResponses: resData },
+            data: { formResponses: resData },
           });
           console.info(`[pdf] Generated and stored: ${pdfResult.filename}`);
         }
@@ -796,14 +796,14 @@ router.post("/:id/decline", async (req: AuthRequest, res: Response) => {
   });
 
   await logAudit({
-    submissionId:  req.params.id,
+    submissionId: req.params.id,
     formReference: currentForDecline?.reference,
-    prevStatus:    currentForDecline?.status ?? "",
-    newStatus:     "Rejected",
-    action:        "declined",
-    actorName:     declinerName,
-    actorEmail:    email,
-    note:          reason?.trim() || null,
+    prevStatus: currentForDecline?.status ?? "",
+    newStatus: "Rejected",
+    action: "declined",
+    actorName: declinerName,
+    actorEmail: email,
+    note: reason?.trim() || null,
   });
 
   // Uncommit all journal entries — submission rejected, removed from global ledger
@@ -811,7 +811,7 @@ router.post("/:id/decline", async (req: AuthRequest, res: Response) => {
   if (currentForDecline?.reference) {
     await prisma.journalEntry.updateMany({
       where: { sessionRef: currentForDecline.reference },
-      data:  { committed: false },
+      data: { committed: false },
     });
   }
 
@@ -868,27 +868,27 @@ router.post("/:id/disapprove-signatory", async (req: AuthRequest, res: Response)
   });
 
   await logAudit({
-    submissionId:  req.params.id,
+    submissionId: req.params.id,
     formReference: currentForDecline?.reference,
-    prevStatus:    currentForDecline?.status ?? "",
-    newStatus:     "Not Approved",
-    action:        "disapproved",
-    actorName:     declinerName,
-    actorEmail:    email,
-    note:          reason.trim(),
+    prevStatus: currentForDecline?.status ?? "",
+    newStatus: "Not Approved",
+    action: "disapproved",
+    actorName: declinerName,
+    actorEmail: email,
+    note: reason.trim(),
   });
 
   if (currentForDecline?.reference) {
     await prisma.journalEntry.updateMany({
       where: { sessionRef: currentForDecline.reference },
-      data:  { committed: false },
+      data: { committed: false },
     });
   }
 
   if (currentForDecline?.submittedBy?.finca_email) {
     const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
     mailer.sendMail({
-      from: `Paperless <${process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
+      from: `Paperless <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
       to: currentForDecline.submittedBy.finca_email,
       subject: `Submission Disapproved: "${currentForDecline.formName}"`,
       html: `
@@ -945,7 +945,7 @@ router.post("/:id/remind/:signatoryId", async (req: AuthRequest, res: Response) 
   const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
 
   await mailer.sendMail({
-    from: `Paperless <${process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
+    from: `Paperless <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
     to: signatory.email,
     subject: `Reminder: Your signature is required on "${submission.formName}"`,
     html: `
@@ -1028,7 +1028,7 @@ router.post("/:id/generate-pdf", async (req: AuthRequest, res: Response) => {
       resData["CompletedFormPDF"] = [
         { isAttachment: true, name: pdfResult.filename, url: `/api/v1/file?docId=${created.id}` }
       ];
-      
+
       await prisma.formSubmission.update({
         where: { id: req.params.id },
         data: { formResponses: resData },

@@ -33,7 +33,7 @@ router.post("/", async (req: Request, res: Response) => {
   await prisma.verificationToken.create({ data: { email, token: otp, expires } });
 
   await mailer.sendMail({
-    from: `Paperless <${process.env.SMTP_USER}>`,
+    from: `Paperless <${process.env.SMTP_FROM}>`,
     to: email,
     subject: "Paperless – Your Login OTP",
     html: `
