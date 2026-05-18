@@ -78,12 +78,12 @@ export async function checkAndUnblockPrerequisites(prereqSubmissionId: string) {
         if (firstSig) {
           const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
           mailer.sendMail({
-            from: `Paperless <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
+            from: `FINCALite <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
             to: firstSig.email,
             subject: `Action Required: "${mainSub.formName}" is now ready for your signature`,
             html: `
               <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
-                <h2 style="color: #B50938; margin-bottom: 4px;">Paperless by FINCA</h2>
+                <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
                 <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
                 <hr style="border-color: #e5e7eb; margin: 20px 0;" />
                 <p style="font-size: 15px; color: #111827;">Hi <strong>${firstSig.userName}</strong>,</p>
@@ -580,12 +580,12 @@ router.post("/:id/disapprove-final", async (req: AuthRequest, res: Response) => 
   if (sub.submittedBy?.finca_email) {
     const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
     mailer.sendMail({
-      from: `Paperless <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
+      from: `FINCALite <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
       to: sub.submittedBy.finca_email,
       subject: `Submission Disapproved: "${sub.formName}"`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
-          <h2 style="color: #B50938; margin-bottom: 4px;">Paperless by FINCA</h2>
+          <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
           <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
           <hr style="border-color: #e5e7eb; margin: 20px 0;" />
           <p style="font-size: 15px; color: #111827;">Hi <strong>${sub.submittedBy.user_name ?? "there"}</strong>,</p>
@@ -888,12 +888,12 @@ router.post("/:id/disapprove-signatory", async (req: AuthRequest, res: Response)
   if (currentForDecline?.submittedBy?.finca_email) {
     const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
     mailer.sendMail({
-      from: `Paperless <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
+      from: `FINCALite <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
       to: currentForDecline.submittedBy.finca_email,
       subject: `Submission Disapproved: "${currentForDecline.formName}"`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
-          <h2 style="color: #B50938; margin-bottom: 4px;">Paperless by FINCA</h2>
+          <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
           <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
           <hr style="border-color: #e5e7eb; margin: 20px 0;" />
           <p style="font-size: 15px; color: #111827;">Hi <strong>${currentForDecline.submittedBy.user_name ?? "there"}</strong>,</p>
@@ -945,12 +945,12 @@ router.post("/:id/remind/:signatoryId", async (req: AuthRequest, res: Response) 
   const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
 
   await mailer.sendMail({
-    from: `Paperless <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
+    from: `FINCALite <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
     to: signatory.email,
     subject: `Reminder: Your signature is required on "${submission.formName}"`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
-        <h2 style="color: #B50938; margin-bottom: 4px;">Paperless by FINCA</h2>
+        <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
         <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
         <hr style="border-color: #e5e7eb; margin: 20px 0;" />
         <p style="font-size: 15px; color: #111827;">Hi <strong>${signatory.userName}</strong>,</p>
@@ -962,7 +962,7 @@ router.post("/:id/remind/:signatoryId", async (req: AuthRequest, res: Response) 
           <p style="margin: 4px 0 0; font-size: 13px; color: #6b7280;">Reference: ${submission.reference ?? "N/A"}</p>
           <p style="margin: 4px 0 0; font-size: 13px; color: #6b7280;">Submitted by: ${submitterName}</p>
         </div>
-        <p style="font-size: 14px; color: #374151;">Please log in to the Paperless platform to review and sign.</p>
+        <p style="font-size: 14px; color: #374151;">Please log in to the FINCALite platform to review and sign.</p>
         <a href="${appUrl}/dashboard/workflow" style="display: inline-block; background: #B50938; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; margin-top: 8px;">Go to Workflow Queue</a>
         <p style="font-size: 12px; color: #9ca3af; margin-top: 24px;">If you believe this was sent in error, please contact your administrator.</p>
       </div>

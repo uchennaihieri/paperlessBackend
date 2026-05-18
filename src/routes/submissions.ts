@@ -32,7 +32,7 @@ router.use(authenticate as any);
 router.get("/", async (_req, res: Response) => {
   const submissions = await prisma.formSubmission.findMany({
     where: {
-      status: { notIn: ["Internal Attachment", "Not Approved"] }
+      status: { notIn: ["Internal Attachment", "Not Approved", "Deleted"] }
     },
     orderBy: { createdAt: "desc" },
     include: {
@@ -50,7 +50,7 @@ router.get("/my", async (req: AuthRequest, res: Response) => {
   const submissions = await prisma.formSubmission.findMany({
     where: {
       submittedById: req.user.id,
-      status: { notIn: ["Internal Attachment", "Not Approved"] }
+      status: { notIn: ["Internal Attachment", "Not Approved", "Deleted"] }
     },
     orderBy: { createdAt: "desc" },
     include: {
@@ -733,12 +733,12 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
         const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
         const fillUrl = `${appUrl}/dashboard/forms/draft/${prereqSub.id}`;
         mailer.sendMail({
-          from: `Paperless <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
+          from: `FINCALite <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
           to: targetEmail,
           subject: `Action Required: Please complete the "${targetTemplate.name}" form`,
           html: `
             <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
-              <h2 style="color: #B50938; margin-bottom: 4px;">Paperless by FINCA</h2>
+              <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
               <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
               <hr style="border-color: #e5e7eb; margin: 20px 0;" />
               <p style="font-size: 15px; color: #111827;">Hello,</p>
@@ -944,6 +944,53 @@ router.delete("/:id", async (req: AuthRequest, res: Response) => {
 
   await prisma.formSubmission.delete({ where: { id: req.params.id } });
   res.json({ success: true });
+});
+
+// ── PATCH /api/v1/submissions/:id/soft-delete ─────────────────────────────────
+// Administrator can soft-delete any submission, specifying a reason.
+router.patch("/:id/soft-delete", async (req: AuthRequest, res: Response) => {
+  const isSystemAdmin = req.user?.user_role?.toLowerCase() === "administrator" || req.user?.specialAccess?.toLowerCase().includes("administrator");
+  
+  if (!isSystemAdmin) {
+    res.status(403).json({ success: false, error: "Forbidden: Administrators only" });
+    return;
+  }
+
+  const { reason } = req.body;
+  if (!reason) {
+    res.status(400).json({ success: false, error: "A reason is required for soft deletion." });
+    return;
+  }
+
+  const existing = await prisma.formSubmission.findUnique({
+    where: { id: req.params.id },
+  });
+
+  if (!existing) {
+    res.status(404).json({ success: false, error: "Submission not found" });
+    return;
+  }
+
+  const updated = await prisma.formSubmission.update({
+    where: { id: req.params.id },
+    data: { status: "Deleted" },
+  });
+
+  // Audit trail
+  await prisma.formAuditTrail.create({
+    data: {
+      submissionId: existing.id,
+      formReference: existing.reference,
+      prevStatus: existing.status,
+      newStatus: "Deleted",
+      action: "soft_deleted",
+      actorName: req.user?.user_name ?? req.user?.email ?? "Administrator",
+      actorEmail: req.user?.email ?? null,
+      note: reason,
+    },
+  }).catch((e: any) => console.error("[audit] soft-delete error:", e));
+
+  res.json({ success: true, data: updated });
 });
 
 export default router;

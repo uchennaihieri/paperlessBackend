@@ -33,12 +33,12 @@ router.post("/", async (req: Request, res: Response) => {
   await prisma.verificationToken.create({ data: { email, token: otp, expires } });
 
   await mailer.sendMail({
-    from: `Paperless <${process.env.SMTP_FROM}>`,
+    from: `FINCALite <${process.env.SMTP_FROM}>`,
     to: email,
-    subject: "Paperless – Your Login OTP",
+    subject: "FINCALite – Your Login OTP",
     html: `
       <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px;">
-        <h2 style="color:#B50938;margin-bottom:4px;">Paperless by FINCA</h2>
+        <h2 style="color:#B50938;margin-bottom:4px;">FINCALite</h2>
         <p style="color:#6b7280;font-size:14px;margin-top:0;">Operations Platform</p>
         <hr style="border-color:#e5e7eb;margin:20px 0;" />
         <p style="font-size:15px;color:#111827;">Your one-time login code is:</p>

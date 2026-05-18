@@ -79,12 +79,12 @@ router.post("/:id/remind", async (req: AuthRequest, res: Response) => {
     const fillUrl = `${appUrl}/dashboard/forms/draft/${prereq.prereqSubmission.id}`;
 
     await mailer.sendMail({
-      from: `Paperless <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
+      from: `FINCALite <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
       to: prereq.targetEmail,
       subject: `Reminder: Please complete the "${prereq.targetForm.name}" form`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
-          <h2 style="color: #B50938; margin-bottom: 4px;">Paperless by FINCA</h2>
+          <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
           <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
           <hr style="border-color: #e5e7eb; margin: 20px 0;" />
           <p style="font-size: 15px; color: #111827;">Hello,</p>

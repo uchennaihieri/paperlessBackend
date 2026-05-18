@@ -61,12 +61,12 @@ router.post("/login", async (req: Request, res: Response) => {
 
   try {
     await mailer.sendMail({
-      from: `Paperless <${process.env.SMTP_USER}>`,
+      from: `FINCALite <${process.env.SMTP_USER}>`,
       to: email,
-      subject: "Paperless – Your Login OTP",
+      subject: "FINCALite – Your Login OTP",
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
-          <h2 style="color: #B50938; margin-bottom: 4px;">Paperless by FINCA</h2>
+          <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
           <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
           <hr style="border-color: #e5e7eb; margin: 20px 0;" />
           <p style="font-size: 15px; color: #111827;">Your one-time login code is:</p>
@@ -321,16 +321,16 @@ router.post("/set-password", authenticate as any, requireAdmin as any, async (re
     const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
     try {
       await mailer.sendMail({
-        from: `Paperless <${process.env.SMTP_FROM}>`,
+        from: `FINCALite <${process.env.SMTP_FROM}>`,
         to: targetUser.finca_email,
-        subject: "Paperless – Your Password Has Been Reset",
+        subject: "FINCALite – Your Password Has Been Reset",
         html: `
           <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
-            <h2 style="color: #B50938; margin-bottom: 4px;">Paperless by FINCA</h2>
+            <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
             <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
             <hr style="border-color: #e5e7eb; margin: 20px 0;" />
             <p style="font-size: 15px; color: #111827;">Hi <strong>${targetUser.user_name ?? "User"}</strong>,</p>
-            <p style="font-size: 14px; color: #374151;">An administrator has reset your Paperless account password. Use the credentials below to log in. You will be required to set a new password on your next login.</p>
+            <p style="font-size: 14px; color: #374151;">An administrator has reset your FINCALite account password. Use the credentials below to log in. You will be required to set a new password on your next login.</p>
             <div style="background: #f9fafb; border-left: 4px solid #B50938; border-radius: 4px; padding: 16px; margin: 16px 0;">
               <p style="margin: 0 0 8px; font-size: 14px; color: #111827;"><strong>Login URL:</strong> <a href="${appUrl}" style="color: #B50938;">${appUrl}</a></p>
               <p style="margin: 0 0 8px; font-size: 14px; color: #111827;"><strong>Employee ID:</strong> ${targetUser.employee_id ?? employeeId ?? userId}</p>
@@ -388,16 +388,16 @@ router.patch("/devices/:id", authenticate as any, requireAdmin as any, async (re
   // Notify user of decision
   if (device.user.finca_email) {
     mailer.sendMail({
-      from: `Paperless <${process.env.SMTP_USER}>`,
+      from: `FINCALite <${process.env.SMTP_USER}>`,
       to: device.user.finca_email,
-      subject: `Paperless – Device ${status}`,
+      subject: `FINCALite – Device ${status}`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
-          <h2 style="color: #B50938;">Paperless by FINCA</h2>
+          <h2 style="color: #B50938;">FINCALite</h2>
           <p>Hi <strong>${device.user.user_name ?? "User"}</strong>,</p>
           <p>Your device registration has been <strong>${status === "Approved" ? "✅ approved" : "❌ rejected"}</strong>.</p>
           ${status === "Approved"
-          ? "<p>You can now log in to Paperless from this device.</p>"
+          ? "<p>You can now log in to FINCALite from this device.</p>"
           : "<p>Contact your administrator if you believe this is a mistake.</p>"
         }
         </div>

@@ -37,6 +37,8 @@ router.get("/", async (req: AuthRequest, res: Response) => {
     return;
   }
 
+  const isSystemAdmin = req.user?.user_role?.toLowerCase() === "administrator" || req.user?.specialAccess?.toLowerCase().includes("administrator");
+
   // ── Pagination ──────────────────────────────────────────────────────────────
   const page  = Math.max(1, parseInt(req.query.page  as string) || 1);
   const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
@@ -93,7 +95,14 @@ router.get("/", async (req: AuthRequest, res: Response) => {
       }
     : {};
 
-  const statusFilter = statuses.length > 0 ? { status: { in: statuses } } : {};
+  let statusFilter: any = statuses.length > 0 ? { status: { in: statuses } } : {};
+  if (!isSystemAdmin) {
+    if (statusFilter.status && statusFilter.status.in) {
+      statusFilter.status.in = statusFilter.status.in.filter((s: string) => s !== "Deleted");
+    } else {
+      statusFilter.status = { notIn: ["Deleted"] };
+    }
+  }
   const dateCreatedFilter = Object.keys(dateFilter).length > 0 ? { createdAt: dateFilter } : {};
 
   // baseFilter does NOT include textSearch — search is applied at the ID-union level below
@@ -207,7 +216,11 @@ router.get("/", async (req: AuthRequest, res: Response) => {
   let finalIds: string[];
   if (search) {
     const searchHitIds = new Set([...responseMatchIds, ...metadataMatchIds]);
-    finalIds = poolIds.filter(id => searchHitIds.has(id));
+    if (isSystemAdmin) {
+      finalIds = Array.from(searchHitIds);
+    } else {
+      finalIds = poolIds.filter(id => searchHitIds.has(id));
+    }
   } else {
     finalIds = poolIds;
   }
