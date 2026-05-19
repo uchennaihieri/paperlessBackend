@@ -41,10 +41,11 @@ router.get("/form/:templateId", requireAdmin as any, async (req: AuthRequest, re
 
 // ── POST /api/v1/forms-access/user/:email ────────────────────────────────────
 // Bulk assigns forms to a user (replaces existing assignments)
+// If applyToAll is true, applies added/removed template deltas to all users.
 router.post("/user/:email", requireAdmin as any, async (req: AuthRequest, res: Response) => {
   const email = req.params.email;
   const adminEmail = req.user?.email ?? "system";
-  const { templateIds } = req.body; // Array of string IDs
+  const { templateIds, applyToAll, addedTemplateIds, removedTemplateIds } = req.body;
 
   if (!Array.isArray(templateIds)) {
     res.status(400).json({ success: false, error: "templateIds must be an array" });
@@ -53,12 +54,11 @@ router.post("/user/:email", requireAdmin as any, async (req: AuthRequest, res: R
 
   try {
     await prisma.$transaction(async (tx) => {
-      // Clear existing access
+      // 1. Exact replacement for the target user
       await tx.formAccess.deleteMany({
         where: { userEmail: { equals: email, mode: "insensitive" } },
       });
 
-      // Insert new access
       if (templateIds.length > 0) {
         await tx.formAccess.createMany({
           data: templateIds.map((id: string) => ({
@@ -68,9 +68,54 @@ router.post("/user/:email", requireAdmin as any, async (req: AuthRequest, res: R
           })),
         });
       }
+
+      // 2. Global distribution of deltas if requested
+      if (applyToAll) {
+        const added = Array.isArray(addedTemplateIds) ? addedTemplateIds : [];
+        const removed = Array.isArray(removedTemplateIds) ? removedTemplateIds : [];
+
+        // Remove unchecked forms from ALL users
+        if (removed.length > 0) {
+          await tx.formAccess.deleteMany({
+            where: { templateId: { in: removed } },
+          });
+        }
+
+        // Add checked forms to ALL users
+        if (added.length > 0) {
+          const allUsers = await tx.user.findMany({
+            where: { finca_email: { not: null } },
+            select: { finca_email: true },
+            distinct: ['finca_email'],
+          });
+
+          const globalGrants: { userEmail: string; templateId: string; grantedBy: string }[] = [];
+          for (const u of allUsers) {
+            const uEmail = u.finca_email?.toLowerCase();
+            if (!uEmail) continue;
+            
+            for (const tId of added) {
+              if (uEmail !== email.toLowerCase()) {
+                 globalGrants.push({
+                   userEmail: uEmail,
+                   templateId: tId,
+                   grantedBy: adminEmail,
+                 });
+              }
+            }
+          }
+
+          if (globalGrants.length > 0) {
+             await tx.formAccess.createMany({
+               data: globalGrants,
+               skipDuplicates: true,
+             });
+          }
+        }
+      }
     });
 
-    res.json({ success: true, message: "Form access updated for user." });
+    res.json({ success: true, message: "Form access updated." });
   } catch (err) {
     console.error("Error updating user form access:", err);
     res.status(500).json({ success: false, error: "Failed to update access" });

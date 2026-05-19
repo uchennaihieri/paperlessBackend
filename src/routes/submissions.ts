@@ -372,15 +372,29 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
   const internalFormTasks: Array<{ fieldName: string, templateId: string, templateName: string, data: any }> = [];
 
   for (const [key, value] of Object.entries(updatedResponses)) {
-    if (value && typeof value === "object" && value.type === "internal_form") {
-      internalFormTasks.push({
-        fieldName: key,
-        templateId: value.templateId,
-        templateName: value.templateName || "Internal Form",
-        data: value.data
-      });
-      // Clear out the raw payload so we can replace it with the generated PDF attachment metadata later
-      delete updatedResponses[key];
+    if (value && typeof value === "object") {
+      if (!Array.isArray(value) && (value as any).type === "internal_form") {
+        internalFormTasks.push({
+          fieldName: key,
+          templateId: (value as any).templateId,
+          templateName: (value as any).templateName || "Internal Form",
+          data: (value as any).data
+        });
+        delete updatedResponses[key];
+      } else if (Array.isArray(value)) {
+        const internalForms = value.filter(v => v && typeof v === "object" && v.type === "internal_form");
+        for (const form of internalForms) {
+          internalFormTasks.push({
+            fieldName: key,
+            templateId: form.templateId,
+            templateName: form.templateName || "Internal Form",
+            data: form.data
+          });
+        }
+        if (internalForms.length > 0) {
+          delete updatedResponses[key];
+        }
+      }
     }
   }
 
