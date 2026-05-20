@@ -66,6 +66,7 @@ model FormTemplate {
 model FormSubmission {
   id             String              @id @default(cuid())
   reference      String?             @unique
+  alias          String?
   formName       String
   status         String              @default("Submitted") // Submitted, In-review, Processing, Awaiting Final Approval, Completed, Rejected
   formResponses  Json                // The actual field answers

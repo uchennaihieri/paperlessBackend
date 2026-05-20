@@ -145,6 +145,76 @@ router.get("/action-items", async (req: AuthRequest, res: Response) => {
   res.json({ success: true, data: itemsWithFlag });
 });
 
+// ── GET /api/v1/submissions/filings ───────────────────────────────────────────
+// Returns completed submissions where template.formOwner matches the user's branch
+router.get("/filings", async (req: AuthRequest, res: Response) => {
+  const userBranch = req.user?.branch ?? null;
+  if (!userBranch) {
+    res.json({ success: true, data: [] });
+    return;
+  }
+
+  try {
+    const submissions = await prisma.formSubmission.findMany({
+      where: {
+        status: "Completed",
+        template: {
+          formOwner: { equals: userBranch, mode: "insensitive" }
+        }
+      },
+      orderBy: { createdAt: "desc" },
+      include: {
+        template: { select: { name: true, formOwner: true } },
+        submittedBy: { select: { user_name: true, finca_email: true, branch: true } },
+      }
+    });
+
+    res.json({ success: true, data: submissions });
+  } catch (err: any) {
+    console.error("Error fetching filings:", err);
+    res.status(500).json({ success: false, error: err.message || "Failed to fetch filings" });
+  }
+});
+
+// ── PUT /api/v1/submissions/:id/alias ──────────────────────────────────────────
+// Update the alias for a completed submission
+router.put("/:id/alias", async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
+  const { alias } = req.body;
+
+  try {
+    const submission = await prisma.formSubmission.findUnique({
+      where: { id },
+      include: { template: true },
+    });
+
+    if (!submission) {
+      res.status(404).json({ success: false, error: "Submission not found" });
+      return;
+    }
+
+    // Verify authorization: only users belonging to the branch that owns the form can edit its alias
+    const userBranch = req.user?.branch ?? null;
+    const formOwner = submission.template?.formOwner;
+
+    // Check if the user is authorized to manage this filing
+    if (!userBranch || !formOwner || userBranch.toLowerCase() !== formOwner.toLowerCase()) {
+      res.status(403).json({ success: false, error: "Unauthorized to modify this filing's alias" });
+      return;
+    }
+
+    const updated = await prisma.formSubmission.update({
+      where: { id },
+      data: { alias: alias ? alias.trim() : null },
+    });
+
+    res.json({ success: true, data: updated });
+  } catch (err: any) {
+    console.error("Error updating filing alias:", err);
+    res.status(500).json({ success: false, error: err.message || "Failed to update alias" });
+  }
+});
+
 // ── GET /api/v1/submissions/by-reference/:ref ─────────────────────────────────
 // Resolve a form reference code (e.g. "PCL001") to a full submission record.
 // Used by the frontend to turn a "formreference" field value into a clickable link.
