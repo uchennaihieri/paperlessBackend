@@ -40,6 +40,7 @@ import journalRouter from "./routes/journal";
 import lookupRouter from "./routes/lookup";
 import creditBureauRouter from "./routes/creditbureau";
 import contractsRouter from "./routes/contracts";
+import statusRouter from "./routes/status";
 
 const app = express();
 const PORT = process.env.PORT ?? 4000;
@@ -108,6 +109,7 @@ v1.use("/journal", journalRouter);
 v1.use("/lookup", lookupRouter);
 v1.use("/credit-bureau", creditBureauRouter);
 v1.use("/contracts", contractsRouter);
+v1.use("/status", statusRouter);
 
 
 app.use("/api/v1", v1);
