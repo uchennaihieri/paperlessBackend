@@ -1,4 +1,4 @@
-import puppeteer from "puppeteer";
+import { launchBrowser } from "./puppeteerBrowser";
 import { uploadToSharePoint, isSharePointEnabled } from "./sharepoint";
 import * as fs from "fs";
 import * as path from "path";
@@ -152,12 +152,7 @@ export async function generateIdentityReportPdf(opts: {
 </html>`;
 
   // ── Generate PDF via Puppeteer ────────────────────────────────────────────
-  let browser: Awaited<ReturnType<typeof puppeteer.launch>> | undefined;
-  try {
-    browser = await puppeteer.launch({ headless: true, args: ["--no-sandbox", "--disable-setuid-sandbox"] });
-  } catch {
-    browser = await puppeteer.launch({ headless: true, channel: "chrome" });
-  }
+  const browser = await launchBrowser();
   const pg = await browser.newPage();
   await pg.setContent(html, { waitUntil: "networkidle0" });
   const pdfBuffer = Buffer.from(await pg.pdf({ format: "A4", printBackground: true }));

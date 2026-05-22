@@ -3,7 +3,7 @@ import prisma from "../lib/prisma";
 import { authenticate } from "../middleware/authenticate";
 import { downloadFromSharePoint } from "../lib/sharepoint";
 import Handlebars from "handlebars";
-import puppeteer from "puppeteer";
+import { launchBrowser } from "../lib/puppeteerBrowser";
 
 const router = Router();
 router.use(authenticate as any);
@@ -453,17 +453,9 @@ router.get("/:id/generate-test-pdf", async (req: Request, res: Response) => {
       return;
     }
 
-    // 6. Render to PDF via Puppeteer (same launch pattern as pdfGenerator)
-    let browser: Awaited<ReturnType<typeof puppeteer.launch>> | undefined;
+    // 6. Render to PDF via Puppeteer
     try {
-      try {
-        // Use bundled Chromium with Linux-safe args (no system Chrome needed)
-        browser = await puppeteer.launch({ headless: true, args: ["--no-sandbox", "--disable-setuid-sandbox"] });
-      } catch {
-        // Fallback: try system Chrome, then Edge (Windows local dev)
-        try { browser = await puppeteer.launch({ headless: true, channel: "chrome" }); }
-        catch { browser = await puppeteer.launch({ headless: true, channel: "msedge" as any }); }
-      }
+      const browser = await launchBrowser();
       const pg = await browser.newPage();
       await pg.setContent(rendered, { waitUntil: "networkidle0" });
       const pdfBuffer = await pg.pdf({
@@ -479,7 +471,6 @@ router.get("/:id/generate-test-pdf", async (req: Request, res: Response) => {
       res.send(Buffer.from(pdfBuffer));
 
     } catch (e: any) {
-      if (browser) await browser.close().catch(() => {});
       res.status(500).json({ success: false, error: `PDF render failed: ${e.message}` });
     }
 

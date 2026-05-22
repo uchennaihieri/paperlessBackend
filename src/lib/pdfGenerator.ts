@@ -1,4 +1,4 @@
-import puppeteer from "puppeteer";
+import { launchBrowser } from "./puppeteerBrowser";
 import Handlebars from "handlebars";
 import prisma from "./prisma";
 import { PDFDocument, rgb } from "pdf-lib";
@@ -159,18 +159,7 @@ export async function generateSubmissionPdf(id: string): Promise<{ buffer: Buffe
           const compiled = Handlebars.compile(htmlSource);
           const html = compiled(unified);
 
-          let browser: Awaited<ReturnType<typeof puppeteer.launch>> | undefined;
-          try {
-            // Use bundled Chromium with Linux-friendly args
-            browser = await puppeteer.launch({ 
-              headless: true,
-              args: ['--no-sandbox', '--disable-setuid-sandbox']
-            });
-          } catch (e) {
-            console.error("Primary launch failed, trying fallback:", e);
-            // Fallback for local Windows testing if bundled Chromium is missing
-            browser = await puppeteer.launch({ headless: true, channel: "chrome" });
-          }
+          const browser = await launchBrowser();
 
           const pg = await browser.newPage();
           await pg.setContent(html, { waitUntil: "networkidle0" });
@@ -331,18 +320,7 @@ export async function generateSubmissionPdf(id: string): Promise<{ buffer: Buffe
       </html>`;
   }
 
-  let browser: Awaited<ReturnType<typeof puppeteer.launch>> | undefined;
-  try {
-    // Use bundled Chromium with Linux-friendly args
-    browser = await puppeteer.launch({ 
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
-    });
-  } catch (e) {
-    console.error("Primary launch failed, trying fallback:", e);
-    // Fallback for local Windows testing if bundled Chromium is missing
-    browser = await puppeteer.launch({ headless: true, channel: "chrome" });
-  }
+  const browser = await launchBrowser();
 
   const page = await browser.newPage();
   await page.setContent(htmlContent, { waitUntil: "load" });
@@ -442,15 +420,7 @@ export async function generateContractPdf(contractRequestId: string, drawnSignat
   const compiled = Handlebars.compile(htmlSource);
   const html = compiled(unified);
 
-  let browser;
-  try {
-    browser = await puppeteer.launch({ 
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
-    });
-  } catch (e) {
-    browser = await puppeteer.launch({ headless: true, channel: "chrome" });
-  }
+  const browser = await launchBrowser();
 
   const page = await browser.newPage();
   await page.setContent(html, { waitUntil: "networkidle0" });
