@@ -457,9 +457,12 @@ router.get("/:id/generate-test-pdf", async (req: Request, res: Response) => {
     let browser: Awaited<ReturnType<typeof puppeteer.launch>> | undefined;
     try {
       try {
-        browser = await puppeteer.launch({ headless: true, channel: "chrome" });
+        // Use bundled Chromium with Linux-safe args (no system Chrome needed)
+        browser = await puppeteer.launch({ headless: true, args: ["--no-sandbox", "--disable-setuid-sandbox"] });
       } catch {
-        browser = await puppeteer.launch({ headless: true, channel: "msedge" as any });
+        // Fallback: try system Chrome, then Edge (Windows local dev)
+        try { browser = await puppeteer.launch({ headless: true, channel: "chrome" }); }
+        catch { browser = await puppeteer.launch({ headless: true, channel: "msedge" as any }); }
       }
       const pg = await browser.newPage();
       await pg.setContent(rendered, { waitUntil: "networkidle0" });

@@ -411,7 +411,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
         let storedPath: string;
         if (isSharePointEnabled()) {
           storedPath = await uploadToSharePoint(
-            buf, originalFilename, "application/pdf", `uploads/${formFolder}/${refFolder}`
+            buf, originalFilename, "application/pdf", `${process.env.SHAREPOINT_UPLOAD_FOLDER ?? "uploads"}/${formFolder}/${refFolder}`
           );
         } else {
           const uploadDir = process.env.UPLOAD_DIR ?? "C:\\Users\\USER\\uploads";
@@ -505,7 +505,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
         pdfResult.buffer,
         originalFilename,
         "application/pdf",
-        `uploads/${formFolder}/${refFolder}`
+        `${process.env.SHAREPOINT_UPLOAD_FOLDER ?? "uploads"}/${formFolder}/${refFolder}`
       );
     } else {
       const uploadDir = process.env.UPLOAD_DIR ?? "C:\\Users\\USER\\uploads";
@@ -557,8 +557,8 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
         let storedPath: string;
 
         if (isSharePointEnabled()) {
-          // SharePoint folder: uploads/PETTY CASH LIVE/PCL1
-          const folder = `uploads/${formFolder}/${refFolder}`;
+          // SharePoint folder: {SHAREPOINT_UPLOAD_FOLDER}/PETTY CASH LIVE/PCL1
+          const folder = `${process.env.SHAREPOINT_UPLOAD_FOLDER ?? "uploads"}/${formFolder}/${refFolder}`;
           storedPath = await uploadToSharePoint(
             file.buffer,
             file.originalname,
@@ -687,7 +687,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
         if (isSharePointEnabled()) {
           storedPath = await uploadToSharePoint(
             pdfResult.buffer, pdfResult.filename, "application/pdf",
-            `uploads/${formFolder}/${refFolder}`
+            `${process.env.SHAREPOINT_UPLOAD_FOLDER ?? "uploads"}/${formFolder}/${refFolder}`
           );
         } else {
           const uploadDir = process.env.UPLOAD_DIR ?? "C:\\Users\\USER\\uploads";

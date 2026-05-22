@@ -716,7 +716,7 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
         if (isSharePointEnabled()) {
           storedPath = await uploadToSharePoint(
             pdfResult.buffer, pdfResult.filename, "application/pdf",
-            `uploads/${formFolder}/${refFolder}`
+            `${process.env.SHAREPOINT_UPLOAD_FOLDER ?? "uploads"}/${formFolder}/${refFolder}`
           );
         }
 
@@ -996,7 +996,7 @@ router.post("/:id/generate-pdf", async (req: AuthRequest, res: Response) => {
     let storedPath: string = "";
 
     if (isSharePointEnabled()) {
-      const folder = `uploads/${formFolder}/${refFolder}`;
+      const folder = `${process.env.SHAREPOINT_UPLOAD_FOLDER ?? "uploads"}/${formFolder}/${refFolder}`;
       storedPath = await uploadToSharePoint(
         pdfResult.buffer,
         pdfResult.filename,
