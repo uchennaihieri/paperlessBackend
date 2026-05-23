@@ -41,6 +41,8 @@ import lookupRouter from "./routes/lookup";
 import creditBureauRouter from "./routes/creditbureau";
 import contractsRouter from "./routes/contracts";
 import statusRouter from "./routes/status";
+import appVersionRouter from "./routes/app-version";
+import appDownloadRouter from "./routes/app-download";
 
 const app = express();
 const PORT = process.env.PORT ?? 4000;
@@ -78,6 +80,10 @@ app.get("/health", (_req, res) =>
   res.json({ status: "ok", ts: new Date().toISOString() })
 );
 
+// ── Public: mobile APK download (no authentication required) ─────────────────
+// Streams the APK directly from SharePoint. Safe to use in QR codes.
+app.use("/app/download", appDownloadRouter);
+
 // ── API routes (v1)
 const v1 = express.Router();
 v1.use("/auth", authRouter);
@@ -110,6 +116,7 @@ v1.use("/lookup", lookupRouter);
 v1.use("/credit-bureau", creditBureauRouter);
 v1.use("/contracts", contractsRouter);
 v1.use("/status", statusRouter);
+v1.use("/app-version", appVersionRouter);
 
 
 app.use("/api/v1", v1);

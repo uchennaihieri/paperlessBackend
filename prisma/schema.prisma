@@ -378,3 +378,15 @@ model ContractRequest {
   
   @@map("contract_requests")
 }
+
+model AppVersion {
+  id          String   @id @default(cuid())
+  version     String   // e.g. "1.2.3"
+  downloadUrl String   // SharePoint or direct URL to the APK
+  releaseNotes String? @db.Text
+  publishedAt DateTime @default(now())
+  publishedBy String   // email of admin who published
+  updatedAt   DateTime @updatedAt
+
+  @@map("app_versions")
+}
