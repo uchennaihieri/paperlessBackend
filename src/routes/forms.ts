@@ -138,6 +138,34 @@ router.get("/extended-options", async (req, res: Response) => {
   }
 });
 
+// ── GET /api/v1/forms/excel-enabled ──────────────────────────────────────────
+router.get("/excel-enabled", async (req: AuthRequest, res: Response) => {
+  const userRole = (req.user?.user_role ?? "").toLowerCase();
+  const specialAccess = (req.user?.specialAccess ?? "").toLowerCase();
+  const isAdmin = userRole === "administrator" || userRole === "admin" || userRole === "superadmin" || specialAccess.includes("administrator");
+  const email = req.user?.email?.toLowerCase() ?? "";
+
+  let templates;
+  if (isAdmin) {
+    templates = await prisma.formTemplate.findMany({ 
+      where: { generatesExcel: true },
+      orderBy: { name: "asc" } 
+    });
+  } else {
+    // Return excel-enabled forms the user has access to
+    const accessRecords = await prisma.formAccess.findMany({
+      where: { userEmail: email },
+      select: { templateId: true }
+    });
+    const templateIds = accessRecords.map(a => a.templateId);
+    templates = await prisma.formTemplate.findMany({
+      where: { id: { in: templateIds }, generatesExcel: true },
+      orderBy: { name: "asc" }
+    });
+  }
+  res.json({ success: true, data: templates });
+});
+
 // ── GET /api/v1/forms/:id ──────────────────────────────────────────────────────
 router.get("/:id", async (req: AuthRequest, res: Response) => {
   const template = await prisma.formTemplate.findUnique({ where: { id: req.params.id } });
@@ -172,7 +200,7 @@ router.get("/:id", async (req: AuthRequest, res: Response) => {
 
 // ── POST /api/v1/forms ─────────────────────────────────────────────────────────
 router.post("/", requireAdmin as any, async (req: AuthRequest, res: Response) => {
-  const { name, description, fields, formOwner, formTreater, htmlTemplate, pdfGeneratorType, pdfTemplateId, mobileEnabled, accountServicesEnabled, isInternal, needsContract, contractTemplateId } = req.body;
+  const { name, description, fields, formOwner, formTreater, htmlTemplate, pdfGeneratorType, generatesExcel, pdfTemplateId, mobileEnabled, accountServicesEnabled, isInternal, needsContract, contractTemplateId } = req.body;
   try {
     const template = await prisma.formTemplate.create({
       data: {
@@ -186,6 +214,7 @@ router.post("/", requireAdmin as any, async (req: AuthRequest, res: Response) =>
         formTreater: formTreater ?? null,
         htmlTemplate: htmlTemplate ?? null,
         pdfGeneratorType: pdfGeneratorType ?? "none",
+        generatesExcel: generatesExcel ?? false,
         pdfTemplateId: pdfTemplateId || null,
         needsContract: needsContract ?? false,
         contractTemplateId: contractTemplateId || null,
@@ -204,7 +233,7 @@ router.post("/", requireAdmin as any, async (req: AuthRequest, res: Response) =>
 
 // ── PATCH /api/v1/forms/:id ───────────────────────────────────────────────────
 router.patch("/:id", requireAdmin as any, async (req: AuthRequest, res: Response) => {
-  const { name, description, fields, formOwner, formTreater, htmlTemplate, pdfGeneratorType, pdfTemplateId, mobileEnabled, accountServicesEnabled, isInternal, needsContract, contractTemplateId } = req.body;
+  const { name, description, fields, formOwner, formTreater, htmlTemplate, pdfGeneratorType, generatesExcel, pdfTemplateId, mobileEnabled, accountServicesEnabled, isInternal, needsContract, contractTemplateId } = req.body;
   try {
     const template = await prisma.formTemplate.update({
       where: { id: req.params.id },
@@ -219,6 +248,7 @@ router.patch("/:id", requireAdmin as any, async (req: AuthRequest, res: Response
         formTreater: formTreater ?? null,
         htmlTemplate: htmlTemplate ?? null,
         pdfGeneratorType: pdfGeneratorType ?? "none",
+        generatesExcel: generatesExcel ?? false,
         pdfTemplateId: pdfTemplateId || null,
         needsContract: needsContract ?? false,
         contractTemplateId: contractTemplateId || null,

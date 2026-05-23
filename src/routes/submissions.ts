@@ -596,9 +596,18 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
   const sigsInput: Array<{ position: number; userName: string; email: string }> =
     signatories ?? [];
 
-  // ── Determine initial status ──────────────────────────────────────────────
+  // ── Determine initial status ───────────────────────────────────────────────────────
   const isFullySigned = sigsInput.length === 1 && finalSignatureStatus === "Signed";
-  const initialStatus = isFullySigned ? "Processing" : "Submitted";
+
+  // Fetch the template to check formTreater and pdfGeneratorType
+  const templateForStatus = await prisma.formTemplate.findUnique({
+    where: { id: templateId },
+    select: { formTreater: true, pdfGeneratorType: true },
+  });
+  const hasTreater = !!(templateForStatus?.formTreater && templateForStatus.formTreater.toLowerCase() !== "none");
+  const submissionPdfType = templateForStatus?.pdfGeneratorType ?? "none";
+
+  const initialStatus = isFullySigned ? (hasTreater ? "Processing" : "Completed") : "Submitted";
 
   let submission;
 
@@ -673,7 +682,8 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
   }).catch((e: any) => console.error("[audit] submit:", e));
 
   // ── Background: generate + store the PDF if fully signed at submission ──
-  if (isFullySigned) {
+  // Only if the form template has a PDF generator type configured (not "none")
+  if (isFullySigned && submissionPdfType !== "none") {
     checkAndUnblockPrerequisites(submission.id);
     setImmediate(async () => {
       try {
@@ -724,6 +734,9 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
         console.error("[pdf] Background generation failed:", err);
       }
     });
+  } else if (isFullySigned) {
+    // No PDF configured — still unblock prerequisites
+    checkAndUnblockPrerequisites(submission.id);
   }
 
   // ── Check for prerequisite fields ────────────────────────────────────────────

@@ -92,10 +92,20 @@ router.get("/:id", async (req: AuthRequest, res: Response) => {
 // ── POST /api/v1/reports ──────────────────────────────────────────────────────
 // Admin: create a new report
 router.post("/", requireAdmin as any, async (req: AuthRequest, res: Response) => {
-  const { name, description, script, granted_emails = [] } = req.body;
+  const { name, description, script, reportType = "manual", formTemplateId, formStatuses, granted_emails = [] } = req.body;
 
-  if (!name || !description || !script) {
-    res.status(400).json({ success: false, error: "name, description, and script are required" });
+  if (!name || !description) {
+    res.status(400).json({ success: false, error: "name and description are required" });
+    return;
+  }
+
+  if (reportType === "manual" && !script) {
+    res.status(400).json({ success: false, error: "script is required for manual reports" });
+    return;
+  }
+
+  if (reportType === "form" && !formTemplateId) {
+    res.status(400).json({ success: false, error: "formTemplateId is required for form-based reports" });
     return;
   }
 
@@ -109,7 +119,10 @@ router.post("/", requireAdmin as any, async (req: AuthRequest, res: Response) =>
     data: {
       name,
       description,
-      script,
+      reportType,
+      formTemplateId: formTemplateId ?? null,
+      formStatuses: formStatuses ?? null,
+      script: script ?? null,
       createdBy: req.user!.email,
       access: {
         create: valid.map((userEmail) => ({ userEmail })),
@@ -124,7 +137,7 @@ router.post("/", requireAdmin as any, async (req: AuthRequest, res: Response) =>
 // ── PUT /api/v1/reports/:id ───────────────────────────────────────────────────
 // Admin: update an existing report and replace its access list
 router.put("/:id", requireAdmin as any, async (req: AuthRequest, res: Response) => {
-  const { name, description, script, granted_emails } = req.body;
+  const { name, description, script, reportType, formTemplateId, formStatuses, granted_emails } = req.body;
 
   const existing = await prisma.report.findUnique({ where: { id: req.params.id } });
   if (!existing) { res.status(404).json({ success: false, error: "Report not found" }); return; }
@@ -147,6 +160,9 @@ router.put("/:id", requireAdmin as any, async (req: AuthRequest, res: Response) 
       ...(name !== undefined && { name }),
       ...(description !== undefined && { description }),
       ...(script !== undefined && { script }),
+      ...(reportType !== undefined && { reportType }),
+      ...(formTemplateId !== undefined && { formTemplateId: formTemplateId || null }),
+      ...(formStatuses !== undefined && { formStatuses: formStatuses || null }),
     },
   });
 
@@ -210,12 +226,80 @@ router.post("/:id/spool", async (req: AuthRequest, res: Response) => {
 
   const fromDate = new Date(from_date);
   const toDate = new Date(to_date);
+  // Extend toDate to end of day so submissions on the last day are included
+  toDate.setHours(23, 59, 59, 999);
 
   if (isNaN(fromDate.getTime())) { res.status(400).json({ success: false, error: "from_date is not a valid date" }); return; }
   if (isNaN(toDate.getTime())) { res.status(400).json({ success: false, error: "to_date is not a valid date" }); return; }
   if (toDate < fromDate) { res.status(400).json({ success: false, error: "to_date must not be before from_date" }); return; }
 
-  // Validate branch: accept "ALL" or any branch that exists on an active user
+  // ── Form-based report: dynamically query FormSubmission records ───────────
+  if (report.reportType === "form") {
+    if (!report.formTemplateId) {
+      res.status(400).json({ success: false, error: "This report has no form template linked." });
+      return;
+    }
+
+    try {
+      const statusFilter = Array.isArray(report.formStatuses) && report.formStatuses.length > 0
+        ? (report.formStatuses as string[])
+        : undefined;
+
+      const submissions = await prisma.formSubmission.findMany({
+        where: {
+          templateId: report.formTemplateId,
+          createdAt: { gte: fromDate, lte: toDate },
+          ...(branch !== "ALL" && {
+            submittedBy: { branch: { equals: branch, mode: "insensitive" } },
+          }),
+          ...(statusFilter && { status: { in: statusFilter } }),
+        },
+        include: {
+          submittedBy: { select: { user_name: true, finca_email: true, branch: true } },
+          signatories: { select: { userName: true, email: true, status: true, signedAt: true }, orderBy: { position: "asc" } },
+        },
+        orderBy: { createdAt: "desc" },
+      });
+
+      // Flatten each submission into a single row for Excel
+      const rows = submissions.map((sub) => {
+        const responses = (sub.formResponses as Record<string, any>) ?? {};
+        const flat: Record<string, any> = {
+          Reference: sub.reference ?? sub.id,
+          "Form Name": sub.formName,
+          Status: sub.status,
+          "Submitted By": sub.submittedBy?.user_name ?? "",
+          "Submitter Email": sub.submittedBy?.finca_email ?? "",
+          Branch: sub.submittedBy?.branch ?? "",
+          "Submission Date": sub.createdAt.toISOString(),
+        };
+
+        // Add signatory info
+        sub.signatories.forEach((sig, i) => {
+          flat[`Signatory ${i + 1}`] = sig.userName;
+          flat[`Signatory ${i + 1} Status`] = sig.status;
+          flat[`Signatory ${i + 1} Signed At`] = sig.signedAt ? sig.signedAt.toISOString() : "";
+        });
+
+        // Add form response fields (skip file attachment fields)
+        for (const [key, val] of Object.entries(responses)) {
+          if (key === "CompletedFormPDF" || key === "CompletedFormExcel") continue;
+          if (Array.isArray(val) && val.length > 0 && val[0]?.isAttachment) continue;
+          flat[key] = Array.isArray(val) ? val.join(", ") : String(val ?? "");
+        }
+
+        return flat;
+      });
+
+      res.json({ success: true, data: rows, reportType: "form", count: rows.length });
+    } catch (err: any) {
+      console.error("Form report spool error:", err);
+      res.status(200).json({ success: false, error: `Report execution failed: ${err?.message ?? String(err)}` });
+    }
+    return;
+  }
+
+  // Validate branch for manual SQL reports: accept "ALL" or any branch that exists on an active user
   if (branch !== "ALL") {
     const branchExists = await prisma.user.findFirst({
       where: {

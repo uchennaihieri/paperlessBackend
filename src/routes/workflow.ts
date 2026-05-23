@@ -658,7 +658,7 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
     select: {
       status: true,
       reference: true,
-      template: { select: { needsContract: true, contractTemplateId: true } },
+      template: { select: { needsContract: true, contractTemplateId: true, formTreater: true, pdfGeneratorType: true } },
       submittedBy: { select: { finca_email: true } }
     },
   });
@@ -669,7 +669,9 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
   });
   const signerName = signerUser?.user_name ?? email;
 
-  const newSignStatus = unsigned === 0 ? "Processing" : "In-review";
+  // If there's no treater branch configured, skip "Processing" and go straight to "Completed"
+  const hasTreater = !!(currentForSign?.template?.formTreater && currentForSign.template.formTreater.toLowerCase() !== "none");
+  const newSignStatus = unsigned === 0 ? (hasTreater ? "Processing" : "Completed") : "In-review";
 
   const updatedSubmission = await prisma.formSubmission.update({
     where: { id: req.params.id },
@@ -691,7 +693,9 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
   res.json({ success: true });
 
   // ── Background: generate + store the PDF once all signers are done ─────────
-  if (unsigned === 0) {
+  // Only if the form template has a PDF generator type configured (not "none")
+  const pdfGeneratorType = currentForSign?.template?.pdfGeneratorType ?? "none";
+  if (unsigned === 0 && pdfGeneratorType !== "none") {
     if (currentForSign?.template?.needsContract && currentForSign.template.contractTemplateId && currentForSign.submittedBy?.finca_email) {
       await prisma.contractRequest.create({
         data: {
@@ -746,6 +750,18 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
         console.error("[pdf] Background generation failed:", err);
       }
     });
+  } else if (unsigned === 0) {
+    // No PDF, but still need contract + prerequisite unblocking
+    if (currentForSign?.template?.needsContract && currentForSign.template.contractTemplateId && currentForSign.submittedBy?.finca_email) {
+      await prisma.contractRequest.create({
+        data: {
+          submissionId: req.params.id,
+          templateId: currentForSign.template.contractTemplateId,
+          submitterEmail: currentForSign.submittedBy.finca_email,
+        }
+      });
+    }
+    checkAndUnblockPrerequisites(req.params.id);
   }
 });
 
