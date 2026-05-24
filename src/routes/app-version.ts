@@ -25,15 +25,15 @@ router.get("/", authenticate as any, async (_req, res: Response) => {
 router.put("/", authenticate as any, requireAdmin as any, async (req: AuthRequest, res: Response) => {
   const { version, downloadUrl, releaseNotes } = req.body;
 
-  if (!version) {
-    res.status(400).json({ success: false, error: "version is required" });
+  if (!version || !downloadUrl) {
+    res.status(400).json({ success: false, error: "version and downloadUrl are required" });
     return;
   }
 
   const record = await prisma.appVersion.create({
     data: {
       version,
-      downloadUrl: downloadUrl ?? "",  // not used for delivery; streaming endpoint is the source of truth
+      downloadUrl,   // GitHub Releases URL provided by admin
       releaseNotes: releaseNotes ?? null,
       publishedBy: req.user!.email,
     },

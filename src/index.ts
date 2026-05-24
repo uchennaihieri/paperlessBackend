@@ -42,7 +42,6 @@ import creditBureauRouter from "./routes/creditbureau";
 import contractsRouter from "./routes/contracts";
 import statusRouter from "./routes/status";
 import appVersionRouter from "./routes/app-version";
-import appDownloadRouter from "./routes/app-download";
 
 const app = express();
 const PORT = process.env.PORT ?? 4000;
@@ -56,17 +55,19 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "http://localhost:3000")
   .split(",")
   .map((o) => o.trim());
 
-app.use(
-  cors({
-    origin: (origin, cb) => {
-      if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
-      cb(new Error(`CORS: origin ${origin} not allowed`));
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
+// app.use(
+//   cors({
+//     origin: (origin, cb) => {
+//       if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+//       cb(new Error(`CORS: origin ${origin} not allowed`));
+//     },
+//     credentials: true,
+//     methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+//     allowedHeaders: ["Content-Type", "Authorization"],
+//   })
+// );
+
+app.use(cors());
 
 // ── Body parsing
 app.use(express.json({ limit: "50mb" }));
@@ -80,9 +81,6 @@ app.get("/health", (_req, res) =>
   res.json({ status: "ok", ts: new Date().toISOString() })
 );
 
-// ── Public: mobile APK download (no authentication required) ─────────────────
-// Streams the APK directly from SharePoint. Safe to use in QR codes.
-app.use("/app/download", appDownloadRouter);
 
 // ── API routes (v1)
 const v1 = express.Router();
@@ -125,8 +123,12 @@ app.use("/api/v1", v1);
 app.use(notFound);
 app.use(errorHandler);
 
-app.listen(PORT, () => {
-  logger.info(`🚀  Paperless API listening on http://localhost:${PORT}`);
+// app.listen(PORT, () => {
+//   logger.info(`🚀  Paperless API listening on http://localhost:${PORT}`);
+// });
+
+app.listen(Number(PORT), "0.0.0.0", () => {
+  logger.info(`🚀 Paperless API listening on port ${PORT}`);
 });
 
 export default app;
