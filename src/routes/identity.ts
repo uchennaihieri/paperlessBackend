@@ -64,6 +64,7 @@ router.get("/logs", async (req: AuthRequest, res: Response) => {
 
   const where: any = {};
   if (type && type !== "all") where.idType = type;
+  where.verifiedBy = req.user?.email || "Unknown";
   if (search) {
     where.OR = [
       { reference:   { contains: search, mode: "insensitive" } },
@@ -118,7 +119,7 @@ router.get("/lookup/:idType/:idNumber", async (req: AuthRequest, res: Response) 
 // ── POST /api/v1/identity/bvn/:idNumber ───────────────────────────────────────
 router.post("/bvn/:idNumber", async (req: AuthRequest, res: Response) => {
   const { idNumber } = req.params;
-  const { firstname, lastname, dob, phone, email, gender, submissionId, forceNew } = req.body;
+  const { firstname, lastname, dob, phone, email, gender, submissionId, forceNew, cloneFromReference } = req.body;
 
   if (!firstname || !lastname) {
     res.status(400).json({ success: false, error: "firstname and lastname are required" });
@@ -127,6 +128,70 @@ router.post("/bvn/:idNumber", async (req: AuthRequest, res: Response) => {
 
   try {
     const cutoffTime = new Date(Date.now() - CACHE_MS);
+    const currentUserEmail = req.user?.email || "Unknown";
+
+    // 0. Handle explicit cloneFromReference request
+    if (cloneFromReference) {
+      const sourceLog = await prisma.identityVerificationLog.findUnique({
+        where: { reference: cloneFromReference }
+      });
+      if (!sourceLog) {
+        res.status(404).json({ success: false, error: "Source check log not found" });
+        return;
+      }
+      const reference = await generateReference("BVN");
+      const clonedLog = await prisma.identityVerificationLog.create({
+        data: {
+          reference,
+          idType: "bvn",
+          idNumber: sourceLog.idNumber,
+          subjectName: sourceLog.subjectName,
+          status: sourceLog.status,
+          requestData: sourceLog.requestData as any,
+          responseData: sourceLog.responseData as any,
+          verifiedBy: currentUserEmail,
+        }
+      });
+
+      // Generate PDF in background for cloned reference
+      setImmediate(async () => {
+        try {
+          const pdfPath = await generateIdentityReportPdf({
+            reference,
+            idType: "bvn",
+            idNumber: sourceLog.idNumber,
+            subjectName: sourceLog.subjectName,
+            status: sourceLog.status,
+            verifiedBy: currentUserEmail,
+            checkedAt: clonedLog.createdAt,
+            requestData: sourceLog.requestData as any,
+            responseData: sourceLog.responseData as any,
+          });
+          await prisma.identityVerificationLog.update({
+            where: { id: clonedLog.id },
+            data: { pdfPath },
+          });
+        } catch (e) {
+          logger.error("Failed to generate cloned BVN PDF report:", e);
+        }
+      });
+
+      await logToAuditTrail(submissionId, req.user, `BVN Record Cloned for ${sourceLog.subjectName} [${reference}]`);
+
+      res.json({
+        success: true,
+        data: sourceLog.responseData,
+        reference,
+        status: sourceLog.status,
+        id: clonedLog.id,
+        idType: clonedLog.idType,
+        idNumber: clonedLog.idNumber,
+        subjectName: clonedLog.subjectName,
+        verifiedBy: clonedLog.verifiedBy,
+        createdAt: clonedLog.createdAt.toISOString()
+      });
+      return;
+    }
 
     // 1. Check Cache
     let existingLog = null;
@@ -143,7 +208,60 @@ router.post("/bvn/:idNumber", async (req: AuthRequest, res: Response) => {
 
     if (existingLog) {
       data = existingLog.responseData;
-      reference = existingLog.reference;
+      status = existingLog.status;
+      reference = await generateReference("BVN");
+      
+      const newLog = await prisma.identityVerificationLog.create({
+        data: {
+          reference,
+          idType: "bvn",
+          idNumber,
+          subjectName: existingLog.subjectName,
+          status,
+          requestData: { firstname, lastname, dob, phone, email, gender },
+          responseData: data as any,
+          verifiedBy: currentUserEmail,
+        },
+      });
+
+      // Generate PDF in background
+      setImmediate(async () => {
+        try {
+          const pdfPath = await generateIdentityReportPdf({
+            reference,
+            idType: "bvn",
+            idNumber,
+            subjectName: existingLog.subjectName,
+            status,
+            verifiedBy: currentUserEmail,
+            checkedAt: newLog.createdAt,
+            requestData: { firstname, lastname, dob, phone, email, gender },
+            responseData: data as any,
+          });
+          await prisma.identityVerificationLog.update({
+            where: { id: newLog.id },
+            data: { pdfPath },
+          });
+        } catch (e) {
+          logger.error("Failed to generate cached BVN PDF report:", e);
+        }
+      });
+
+      await logToAuditTrail(submissionId, req.user, `BVN Verified (Cached) for ${existingLog.subjectName} [${reference}]`);
+      
+      res.json({
+        success: true,
+        data,
+        reference,
+        status,
+        id: newLog.id,
+        idType: newLog.idType,
+        idNumber: newLog.idNumber,
+        subjectName: newLog.subjectName,
+        verifiedBy: newLog.verifiedBy,
+        createdAt: newLog.createdAt.toISOString()
+      });
+      return;
     } else {
       // 2. Fetch fresh from QoreID
       try {
@@ -166,7 +284,7 @@ router.post("/bvn/:idNumber", async (req: AuthRequest, res: Response) => {
           status,
           requestData: { firstname, lastname, dob, phone, email, gender },
           responseData: data as any,
-          verifiedBy: req.user?.email || "Unknown",
+          verifiedBy: currentUserEmail,
         },
       });
 
@@ -179,7 +297,7 @@ router.post("/bvn/:idNumber", async (req: AuthRequest, res: Response) => {
             idNumber,
             subjectName: `${firstname} ${lastname}`,
             status,
-            verifiedBy: req.user?.email || "Unknown",
+            verifiedBy: currentUserEmail,
             checkedAt: newLog.createdAt,
             requestData: { firstname, lastname, dob, phone, email, gender },
             responseData: data as any,
@@ -192,12 +310,23 @@ router.post("/bvn/:idNumber", async (req: AuthRequest, res: Response) => {
           logger.error("Failed to generate BVN PDF report:", e);
         }
       });
+
+      // 4. Log to Audit Trail if tied to a submission
+      await logToAuditTrail(submissionId, req.user, `BVN Verified for ${firstname} ${lastname} [${reference}]`);
+
+      res.json({
+        success: true,
+        data,
+        reference,
+        status,
+        id: newLog.id,
+        idType: newLog.idType,
+        idNumber: newLog.idNumber,
+        subjectName: newLog.subjectName,
+        verifiedBy: newLog.verifiedBy,
+        createdAt: newLog.createdAt.toISOString()
+      });
     }
-
-    // 4. Log to Audit Trail if tied to a submission
-    await logToAuditTrail(submissionId, req.user, `BVN Verified for ${firstname} ${lastname} [${reference}]`);
-
-    res.json({ success: true, data, reference, status });
   } catch (error: any) {
     logger.error("Error in getBVNData route:", error);
     res.status(500).json({ success: false, error: error.message || "Failed to verify BVN" });
@@ -207,7 +336,7 @@ router.post("/bvn/:idNumber", async (req: AuthRequest, res: Response) => {
 // ── POST /api/v1/identity/nin/:idNumber ───────────────────────────────────────
 router.post("/nin/:idNumber", async (req: AuthRequest, res: Response) => {
   const { idNumber } = req.params;
-  const { firstname, lastname, middlename, dob, phone, email, gender, submissionId, forceNew } = req.body;
+  const { firstname, lastname, middlename, dob, phone, email, gender, submissionId, forceNew, cloneFromReference } = req.body;
 
   if (!firstname || !lastname) {
     res.status(400).json({ success: false, error: "firstname and lastname are required" });
@@ -216,6 +345,70 @@ router.post("/nin/:idNumber", async (req: AuthRequest, res: Response) => {
 
   try {
     const cutoffTime = new Date(Date.now() - CACHE_MS);
+    const currentUserEmail = req.user?.email || "Unknown";
+
+    // 0. Handle explicit cloneFromReference request
+    if (cloneFromReference) {
+      const sourceLog = await prisma.identityVerificationLog.findUnique({
+        where: { reference: cloneFromReference }
+      });
+      if (!sourceLog) {
+        res.status(404).json({ success: false, error: "Source check log not found" });
+        return;
+      }
+      const reference = await generateReference("NIN");
+      const clonedLog = await prisma.identityVerificationLog.create({
+        data: {
+          reference,
+          idType: "nin",
+          idNumber: sourceLog.idNumber,
+          subjectName: sourceLog.subjectName,
+          status: sourceLog.status,
+          requestData: sourceLog.requestData as any,
+          responseData: sourceLog.responseData as any,
+          verifiedBy: currentUserEmail,
+        }
+      });
+
+      // Generate PDF in background for cloned reference
+      setImmediate(async () => {
+        try {
+          const pdfPath = await generateIdentityReportPdf({
+            reference,
+            idType: "nin",
+            idNumber: sourceLog.idNumber,
+            subjectName: sourceLog.subjectName,
+            status: sourceLog.status,
+            verifiedBy: currentUserEmail,
+            checkedAt: clonedLog.createdAt,
+            requestData: sourceLog.requestData as any,
+            responseData: sourceLog.responseData as any,
+          });
+          await prisma.identityVerificationLog.update({
+            where: { id: clonedLog.id },
+            data: { pdfPath },
+          });
+        } catch (e) {
+          logger.error("Failed to generate cloned NIN PDF report:", e);
+        }
+      });
+
+      await logToAuditTrail(submissionId, req.user, `NIN Record Cloned for ${sourceLog.subjectName} [${reference}]`);
+
+      res.json({
+        success: true,
+        data: sourceLog.responseData,
+        reference,
+        status: sourceLog.status,
+        id: clonedLog.id,
+        idType: clonedLog.idType,
+        idNumber: clonedLog.idNumber,
+        subjectName: clonedLog.subjectName,
+        verifiedBy: clonedLog.verifiedBy,
+        createdAt: clonedLog.createdAt.toISOString()
+      });
+      return;
+    }
 
     // 1. Check Cache
     let existingLog = null;
@@ -232,7 +425,60 @@ router.post("/nin/:idNumber", async (req: AuthRequest, res: Response) => {
 
     if (existingLog) {
       data = existingLog.responseData;
-      reference = existingLog.reference;
+      status = existingLog.status;
+      reference = await generateReference("NIN");
+
+      const newNinLog = await prisma.identityVerificationLog.create({
+        data: {
+          reference,
+          idType: "nin",
+          idNumber,
+          subjectName: existingLog.subjectName,
+          status,
+          requestData: { firstname, lastname, middlename, dob, phone, email, gender },
+          responseData: data as any,
+          verifiedBy: currentUserEmail,
+        },
+      });
+
+      // Generate PDF in background
+      setImmediate(async () => {
+        try {
+          const pdfPath = await generateIdentityReportPdf({
+            reference,
+            idType: "nin",
+            idNumber,
+            subjectName: existingLog.subjectName,
+            status,
+            verifiedBy: currentUserEmail,
+            checkedAt: newNinLog.createdAt,
+            requestData: { firstname, lastname, middlename, dob, phone, email, gender },
+            responseData: data as any,
+          });
+          await prisma.identityVerificationLog.update({
+            where: { id: newNinLog.id },
+            data: { pdfPath },
+          });
+        } catch (e) {
+          logger.error("Failed to generate cached NIN PDF report:", e);
+        }
+      });
+
+      await logToAuditTrail(submissionId, req.user, `NIN Verified (Cached) for ${existingLog.subjectName} [${reference}]`);
+
+      res.json({
+        success: true,
+        data,
+        reference,
+        status,
+        id: newNinLog.id,
+        idType: newNinLog.idType,
+        idNumber: newNinLog.idNumber,
+        subjectName: newNinLog.subjectName,
+        verifiedBy: newNinLog.verifiedBy,
+        createdAt: newNinLog.createdAt.toISOString()
+      });
+      return;
     } else {
       // 2. Fetch fresh from QoreID
       try {
@@ -255,7 +501,7 @@ router.post("/nin/:idNumber", async (req: AuthRequest, res: Response) => {
           status,
           requestData: { firstname, lastname, middlename, dob, phone, email, gender },
           responseData: data as any,
-          verifiedBy: req.user?.email || "Unknown",
+          verifiedBy: currentUserEmail,
         },
       });
 
@@ -268,7 +514,7 @@ router.post("/nin/:idNumber", async (req: AuthRequest, res: Response) => {
             idNumber,
             subjectName: `${firstname} ${lastname}`,
             status,
-            verifiedBy: req.user?.email || "Unknown",
+            verifiedBy: currentUserEmail,
             checkedAt: newNinLog.createdAt,
             requestData: { firstname, lastname, middlename, dob, phone, email, gender },
             responseData: data as any,
@@ -281,12 +527,23 @@ router.post("/nin/:idNumber", async (req: AuthRequest, res: Response) => {
           logger.error("Failed to generate NIN PDF report:", e);
         }
       });
+
+      // 4. Log to Audit Trail if tied to a submission
+      await logToAuditTrail(submissionId, req.user, `NIN Verified for ${firstname} ${lastname} [${reference}]`);
+
+      res.json({
+        success: true,
+        data,
+        reference,
+        status,
+        id: newNinLog.id,
+        idType: newNinLog.idType,
+        idNumber: newNinLog.idNumber,
+        subjectName: newNinLog.subjectName,
+        verifiedBy: newNinLog.verifiedBy,
+        createdAt: newNinLog.createdAt.toISOString()
+      });
     }
-
-    // 4. Log to Audit Trail if tied to a submission
-    await logToAuditTrail(submissionId, req.user, `NIN Verified for ${firstname} ${lastname} [${reference}]`);
-
-    res.json({ success: true, data, reference, status });
   } catch (error: any) {
     logger.error("Error in getNINData route:", error);
     res.status(500).json({ success: false, error: error.message || "Failed to verify NIN" });

@@ -166,6 +166,7 @@ router.get("/logs", async (req: AuthRequest, res: Response) => {
   const skip = (parseInt(page) - 1) * parseInt(limit);
   const where: any = {};
   if (bureau && bureau !== "all") where.bureau = bureau;
+  where.verifiedBy = req.user?.email || "Unknown";
   if (search) {
     where.OR = [
       { reference:   { contains: search, mode: "insensitive" } },
@@ -204,7 +205,7 @@ router.get("/lookup/:bvn", async (req: AuthRequest, res: Response) => {
 
 // ── POST /api/v1/credit-bureau/consumer/bvn ──────────────────────────────────
 router.post("/consumer/bvn", async (req: AuthRequest, res: Response) => {
-  const { bvn, enquiryReason = "Credit Check", productId = 45 } = req.body;
+  const { bvn, enquiryReason = "Credit Check", productId = 45, cloneFromReference } = req.body;
 
   if (!bvn || !/^\d{11}$/.test(String(bvn).trim())) {
     res.status(400).json({ success: false, error: "A valid 11-digit BVN is required." });
@@ -213,6 +214,80 @@ router.post("/consumer/bvn", async (req: AuthRequest, res: Response) => {
   if (productId !== undefined && isNaN(Number(productId))) {
     res.status(400).json({ success: false, error: "productId must be a number." });
     return;
+  }
+
+  const currentUserEmail = req.user?.email || "Unknown";
+
+  // 0. Handle explicit cloneFromReference request
+  if (cloneFromReference) {
+    try {
+      const sourceLog = await prisma.creditBureauLog.findUnique({
+        where: { reference: cloneFromReference }
+      });
+      if (!sourceLog) {
+        res.status(404).json({ success: false, error: "Source check log not found" });
+        return;
+      }
+      const reference = await generateRef("FCB");
+      const clonedLog = await prisma.creditBureauLog.create({
+        data: {
+          reference,
+          bureau: sourceLog.bureau,
+          bvn: sourceLog.bvn,
+          subjectName: sourceLog.subjectName,
+          status: sourceLog.status,
+          matchCount: sourceLog.matchCount,
+          enquiryReason: sourceLog.enquiryReason,
+          productId: sourceLog.productId,
+          requestData: sourceLog.requestData as any,
+          responseData: sourceLog.responseData as any,
+          reportData: sourceLog.reportData as any,
+          verifiedBy: currentUserEmail,
+        }
+      });
+
+      // Generate PDF in background for cloned reference
+      setImmediate(async () => {
+        try {
+          const matchData = sourceLog.responseData as any;
+          const matched = matchData?.matched ?? [];
+          const pdfPath = await generateCrbPdf({
+            reference,
+            bvn: sourceLog.bvn,
+            subjectName: sourceLog.subjectName,
+            status: sourceLog.status,
+            matchCount: sourceLog.matchCount,
+            enquiryReason: sourceLog.enquiryReason,
+            verifiedBy: currentUserEmail,
+            checkedAt: clonedLog.createdAt,
+            matched,
+            report: sourceLog.reportData,
+          });
+          await prisma.creditBureauLog.update({ where: { id: clonedLog.id }, data: { pdfPath } });
+        } catch (e) {
+          logger.error("Failed to generate cloned CRB PDF:", e);
+        }
+      });
+
+      res.json({
+        success: true,
+        reference,
+        status: sourceLog.status,
+        count: sourceLog.matchCount,
+        matched: (sourceLog.responseData as any)?.matched ?? [],
+        id: clonedLog.id,
+        bureau: clonedLog.bureau,
+        bvn: clonedLog.bvn,
+        subjectName: clonedLog.subjectName,
+        verifiedBy: clonedLog.verifiedBy,
+        createdAt: clonedLog.createdAt.toISOString()
+      });
+      return;
+    } catch (err: any) {
+      logger.error("Cloning CRB check failed:", err);
+      res.status(500).json({ success: false, error: "Failed to clone CRB record." });
+      return;
+    }
   }
 
   let status = "Match Found";
@@ -252,7 +327,7 @@ router.post("/consumer/bvn", async (req: AuthRequest, res: Response) => {
       requestData: { bvn, enquiryReason, productId } as any,
       responseData: matchResult as any,
       reportData: reportData,
-      verifiedBy: req.user?.email ?? "Unknown",
+      verifiedBy: currentUserEmail,
     },
   });
 
@@ -261,7 +336,7 @@ router.post("/consumer/bvn", async (req: AuthRequest, res: Response) => {
       const pdfPath = await generateCrbPdf({
         reference, bvn: String(bvn).trim(), subjectName, status,
         matchCount: matchResult.count, enquiryReason: String(enquiryReason),
-        verifiedBy: req.user?.email ?? "Unknown",
+        verifiedBy: currentUserEmail,
         checkedAt: newLog.createdAt, matched: matchResult.matched,
         report: reportData,
       });
@@ -269,7 +344,19 @@ router.post("/consumer/bvn", async (req: AuthRequest, res: Response) => {
     } catch (e) { logger.error("Failed to generate CRB PDF:", e); }
   });
 
-  res.json({ success: true, reference, status, count: matchResult.count, matched: matchResult.matched });
+  res.json({
+    success: true,
+    reference,
+    status,
+    count: matchResult.count,
+    matched: matchResult.matched,
+    id: newLog.id,
+    bureau: newLog.bureau,
+    bvn: newLog.bvn,
+    subjectName: newLog.subjectName,
+    verifiedBy: newLog.verifiedBy,
+    createdAt: newLog.createdAt.toISOString()
+  });
 });
 
 // ── GET /api/v1/credit-bureau/pdf/:reference ─────────────────────────────────

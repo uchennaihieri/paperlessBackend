@@ -8,7 +8,7 @@ import { hashToken, decrypt } from "../lib/crypto";
 import { isSharePointEnabled, uploadToSharePoint, downloadFromSharePoint } from "../lib/sharepoint";
 import { mailer } from "../lib/mailer";
 import { generateSubmissionPdf } from "../lib/pdfGenerator";
-import { checkAndUnblockPrerequisites } from "./workflow";
+import { checkAndUnblockPrerequisites, notifyActiveSignatories, notifySuccessfulCompletion } from "./workflow";
 
 // Files are always buffered in memory; they go straight to SharePoint (or disk)
 // on submission — never stored in a temp location.
@@ -756,7 +756,14 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
       const prereqFields = fields.filter(
         (f: any) => f.isPrerequisite === true && f.targetFormTemplateId
       );
-      if (prereqFields.length === 0) return;
+      if (prereqFields.length === 0) {
+        if (initialStatus === "Submitted") {
+          notifyActiveSignatories(submission.id);
+        } else if (initialStatus === "Completed") {
+          notifySuccessfulCompletion(submission.id);
+        }
+        return;
+      }
 
       // For each prerequisite field, create a draft submission + SubmissionPrerequisite record
       let prereqCount = 0;
@@ -860,6 +867,12 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
           where: { id: submission.id },
           data: { status: "Blocked - Awaiting Prerequisites" },
         });
+      } else {
+        if (initialStatus === "Submitted") {
+          notifyActiveSignatories(submission.id);
+        } else if (initialStatus === "Completed") {
+          notifySuccessfulCompletion(submission.id);
+        }
       }
     } catch (err) {
       console.error("[prerequisites] Failed to set up prerequisite checks:", err);

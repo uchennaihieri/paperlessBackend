@@ -55,7 +55,6 @@ export async function checkAndUnblockPrerequisites(prereqSubmissionId: string) {
         // Unblock the main submission
         const mainSub = await prisma.formSubmission.findUnique({
           where: { id: prereqLink.mainSubmissionId },
-          include: { signatories: { orderBy: { position: "asc" }, take: 1 } },
         });
         if (!mainSub || mainSub.status !== "Blocked - Awaiting Prerequisites") return;
 
@@ -73,31 +72,8 @@ export async function checkAndUnblockPrerequisites(prereqSubmissionId: string) {
           note: "All prerequisite forms approved. Submission is now active.",
         });
 
-        // Notify the first signatory
-        const firstSig = mainSub.signatories[0];
-        if (firstSig) {
-          const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
-          mailer.sendMail({
-            from: `FINCALite <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
-            to: firstSig.email,
-            subject: `Action Required: "${mainSub.formName}" is now ready for your signature`,
-            html: `
-              <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
-                <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
-                <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
-                <hr style="border-color: #e5e7eb; margin: 20px 0;" />
-                <p style="font-size: 15px; color: #111827;">Hi <strong>${firstSig.userName}</strong>,</p>
-                <p style="font-size: 14px; color: #374151;">All required prerequisite forms have been completed and approved. The following submission is now ready for your signature:</p>
-                <div style="background: #f9fafb; border-left: 4px solid #B50938; border-radius: 4px; padding: 16px; margin: 16px 0;">
-                  <p style="margin: 0; font-weight: 600; color: #111827;">${mainSub.formName}</p>
-                  <p style="margin: 4px 0 0; font-size: 13px; color: #6b7280;">Reference: ${mainSub.reference ?? "N/A"}</p>
-                </div>
-                <a href="${appUrl}/dashboard/workflow" style="display: inline-block; background: #B50938; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; margin-top: 8px;">Go to Workflow Queue</a>
-                <p style="font-size: 12px; color: #9ca3af; margin-top: 24px;">If you believe this was sent in error, please contact your administrator.</p>
-              </div>
-            `,
-          }).catch((e: any) => console.error("[prereq unblock email]", e));
-        }
+        // Notify active pending signatories
+        await notifyActiveSignatories(prereqLink.mainSubmissionId);
       }
     } catch (err) {
       console.error("[prerequisites] Failed to check prerequisite unblocking:", err);
@@ -365,6 +341,8 @@ router.post("/:id/complete", async (req: AuthRequest, res: Response) => {
       actorEmail: email,
       note: "Completed without further approval",
     });
+    // Trigger successful completion email to submitter
+    notifySuccessfulCompletion(req.params.id);
   } else {
     // Routing to a final approver
     await prisma.formSubmission.update({
@@ -385,6 +363,8 @@ router.post("/:id/complete", async (req: AuthRequest, res: Response) => {
       actorEmail: email,
       note: `Routed to ${approverName ?? approverEmail} (${approverEmail})`,
     });
+    // Trigger final approval request email
+    notifyFinalApprover(req.params.id);
   }
   res.json({ success: true });
 });
@@ -453,6 +433,9 @@ router.post("/:id/approve", async (req: AuthRequest, res: Response) => {
     actorName: approverName,
     actorEmail: email,
   });
+
+  // Trigger successful completion email to submitter
+  notifySuccessfulCompletion(req.params.id);
 
   // Commit all pending journal entries for this submission's reference
   if (currentForApprove?.reference) {
@@ -658,6 +641,7 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
     select: {
       status: true,
       reference: true,
+      signingType: true,
       template: { select: { needsContract: true, contractTemplateId: true, formTreater: true, pdfGeneratorType: true } },
       submittedBy: { select: { finca_email: true } }
     },
@@ -688,6 +672,13 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
     actorEmail: email,
     note: unsigned === 0 ? "Last signature — all signers complete" : `${unsigned} signature(s) still pending`,
   });
+
+  // Trigger notifications based on new status
+  if (newSignStatus === "Completed") {
+    notifySuccessfulCompletion(req.params.id);
+  } else if (newSignStatus === "In-review" && currentForSign?.signingType === "sequential") {
+    notifyActiveSignatories(req.params.id);
+  }
 
   // ── Respond immediately — signer should never wait for PDF/SharePoint ─────
   res.json({ success: true });
@@ -1059,5 +1050,166 @@ router.post("/:id/generate-pdf", async (req: AuthRequest, res: Response) => {
     res.status(500).json({ success: false, error: err.message || "Error generating PDF" });
   }
 });
+
+// ── Helper notification functions ───────────────────────────────────────────
+
+export async function notifyActiveSignatories(submissionId: string) {
+  try {
+    const submission = await prisma.formSubmission.findUnique({
+      where: { id: submissionId },
+      include: {
+        signatories: { orderBy: { position: "asc" } },
+        submittedBy: { select: { user_name: true, finca_email: true } },
+      },
+    });
+    if (!submission) return;
+
+    // Do not notify signatories if blocked
+    if (submission.status === "Blocked - Awaiting Prerequisites") return;
+
+    let activeSignatories: any[] = [];
+    if (submission.signingType === "parallel") {
+      activeSignatories = submission.signatories.filter((s: any) => s.status === "Pending");
+    } else {
+      const firstPending = submission.signatories.find((s: any) => s.status === "Pending");
+      if (firstPending) {
+        activeSignatories = [firstPending];
+      }
+    }
+
+    const submitterName = submission.submittedBy?.user_name ?? "A colleague";
+    const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
+
+    if (activeSignatories.length > 0) {
+      console.info(`[notifyActiveSignatories] Sending signature request email(s) for submission ${submissionId} to: ${activeSignatories.map((s) => s.email).join(", ")}`);
+    }
+
+    for (const signatory of activeSignatories) {
+      await mailer.sendMail({
+        from: `FINCALite <${process.env.SMTP_FROM ?? process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
+        to: signatory.email,
+        subject: `Action Required: "${submission.formName}" is ready for your signature`,
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
+            <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
+            <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
+            <hr style="border-color: #e5e7eb; margin: 20px 0;" />
+            <p style="font-size: 15px; color: #111827;">Hi <strong>${signatory.userName}</strong>,</p>
+            <p style="font-size: 14px; color: #374151;">
+              A form requires your signature. Please review the details below:
+            </p>
+            <div style="background: #f9fafb; border-left: 4px solid #B50938; border-radius: 4px; padding: 16px; margin: 16px 0;">
+              <p style="margin: 0; font-weight: 600; color: #111827;">${submission.formName}</p>
+              <p style="margin: 4px 0 0; font-size: 13px; color: #6b7280;">Reference: ${submission.reference ?? "N/A"}</p>
+              <p style="margin: 4px 0 0; font-size: 13px; color: #6b7280;">Submitted by: ${submitterName}</p>
+            </div>
+            <p style="font-size: 14px; color: #374151;">Please log in to the FINCALite platform to review and sign.</p>
+            <a href="${appUrl}/dashboard/workflow" style="display: inline-block; background: #B50938; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; margin-top: 8px;">Go to Workflow Queue</a>
+            <p style="font-size: 12px; color: #9ca3af; margin-top: 24px;">If you believe this was sent in error, please contact your administrator.</p>
+          </div>
+        `,
+      }).then(() => {
+        console.info(`[notifyActiveSignatories] Signature request email successfully sent to ${signatory.email}`);
+      }).catch((e: any) => console.error("[notify active signatories email error]", e));
+    }
+  } catch (err) {
+    console.error("[notifyActiveSignatories] error:", err);
+  }
+}
+
+export async function notifyFinalApprover(submissionId: string) {
+  try {
+    const submission = await prisma.formSubmission.findUnique({
+      where: { id: submissionId },
+      include: {
+        submittedBy: { select: { user_name: true, finca_email: true } },
+      },
+    });
+    if (!submission || !submission.approverEmail) return;
+
+    const submitterName = submission.submittedBy?.user_name ?? "A colleague";
+    const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
+
+    console.info(`[notifyFinalApprover] Sending final approval request email for submission ${submissionId} to ${submission.approverEmail}`);
+
+    await mailer.sendMail({
+      from: `FINCALite <${process.env.SMTP_FROM ?? process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
+      to: submission.approverEmail,
+      subject: `Action Required: Final Approval needed for "${submission.formName}"`,
+      html: `
+          <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
+            <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
+            <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
+            <hr style="border-color: #e5e7eb; margin: 20px 0;" />
+            <p style="font-size: 15px; color: #111827;">Hi <strong>${submission.approvedBy ?? "Approver"}</strong>,</p>
+            <p style="font-size: 14px; color: #374151;">
+              A submission has been processed and is now pending your final approval:
+            </p>
+            <div style="background: #f9fafb; border-left: 4px solid #B50938; border-radius: 4px; padding: 16px; margin: 16px 0;">
+              <p style="margin: 0; font-weight: 600; color: #111827;">${submission.formName}</p>
+              <p style="margin: 4px 0 0; font-size: 13px; color: #6b7280;">Reference: ${submission.reference ?? "N/A"}</p>
+              <p style="margin: 4px 0 0; font-size: 13px; color: #6b7280;">Submitted by: ${submitterName}</p>
+              <p style="margin: 4px 0 0; font-size: 13px; color: #6b7280;">Treated by: ${submission.treatedBy ?? "System"}</p>
+            </div>
+            <p style="font-size: 14px; color: #374151;">Please log in to the FINCALite platform to review and approve/disapprove.</p>
+            <a href="${appUrl}/dashboard/workflow" style="display: inline-block; background: #B50938; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; margin-top: 8px;">Go to Workflow Queue</a>
+            <p style="font-size: 12px; color: #9ca3af; margin-top: 24px;">If you believe this was sent in error, please contact your administrator.</p>
+          </div>
+      `,
+    }).then(() => {
+      console.info(`[notifyFinalApprover] Final approval request email successfully sent to ${submission.approverEmail}`);
+    }).catch((e: any) => console.error("[notify final approver email error]", e));
+  } catch (err) {
+    console.error("[notifyFinalApprover] error:", err);
+  }
+}
+
+export async function notifySuccessfulCompletion(submissionId: string) {
+  try {
+    const submission = await prisma.formSubmission.findUnique({
+      where: { id: submissionId },
+      include: {
+        submittedBy: { select: { user_name: true, finca_email: true } },
+      },
+    });
+
+    const submittedBy = submission?.submittedBy;
+    if (!submission || !submittedBy?.finca_email) return;
+
+    const emailTo = submittedBy.finca_email;
+    const userName = submittedBy.user_name ?? "there";
+    const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
+
+    console.info(`[notifySuccessfulCompletion] Sending successful completion email for submission ${submissionId} to submitter ${emailTo}`);
+
+    await mailer.sendMail({
+      from: `FINCALite <${process.env.SMTP_FROM ?? process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
+      to: emailTo,
+      subject: `Submission Approved: "${submission.formName}"`,
+      html: `
+          <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
+            <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
+            <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
+            <hr style="border-color: #e5e7eb; margin: 20px 0;" />
+            <p style="font-size: 15px; color: #111827;">Hi <strong>${userName}</strong>,</p>
+            <p style="font-size: 14px; color: #374151;">
+              We are pleased to inform you that your submission has been successfully approved and completed!
+            </p>
+            <div style="background: #ecfdf5; border-left: 4px solid #10b981; border-radius: 4px; padding: 16px; margin: 16px 0;">
+              <p style="margin: 0; font-weight: 600; color: #065f46;">${submission.formName}</p>
+              <p style="margin: 4px 0 0; font-size: 13px; color: #047857;">Reference: ${submission.reference ?? "N/A"}</p>
+              <p style="margin: 8px 0 0; font-size: 14px; color: #065f46;"><strong>Status:</strong> Approved & Completed</p>
+            </div>
+            <a href="${appUrl}/dashboard/forms/submission/${submission.id}" style="display: inline-block; background: #10b981; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; margin-top: 8px;">View Submission</a>
+            <p style="font-size: 12px; color: #9ca3af; margin-top: 24px;">If you believe this was sent in error, please contact your administrator.</p>
+          </div>
+      `,
+    }).then(() => {
+      console.info(`[notifySuccessfulCompletion] Completion email successfully sent to ${emailTo}`);
+    }).catch((e: any) => console.error("[notify successful completion email error]", e));
+  } catch (err) {
+    console.error("[notifySuccessfulCompletion] error:", err);
+  }
+}
 
 export default router;
