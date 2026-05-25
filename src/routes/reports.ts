@@ -311,6 +311,11 @@ router.post("/:id/spool", async (req: AuthRequest, res: Response) => {
     if (!branchExists) { res.status(400).json({ success: false, error: `Branch "${branch}" does not exist` }); return; }
   }
 
+  if (!report.script) {
+    res.status(400).json({ success: false, error: "This report has no SQL script configured." });
+    return;
+  }
+
   // ── Execute report script via parameterised raw query ────────────────────
   // Named params (:from_date, :to_date, :branch) are replaced with positional
   // $N placeholders. We use a function callback in .replace() so that $1/$2/$3
