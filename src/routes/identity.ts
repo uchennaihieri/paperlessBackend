@@ -99,10 +99,26 @@ router.get("/logs", async (req: AuthRequest, res: Response) => {
   res.json({ success: true, data: logs, total, page: parseInt(page), limit: parseInt(limit) });
 });
 
+// ── GET /api/v1/identity/lookup/:idType/:idNumber ────────────────────────────
+// Retrieves the most recent identity verification log for the given ID.
+router.get("/lookup/:idType/:idNumber", async (req: AuthRequest, res: Response) => {
+  const { idType, idNumber } = req.params;
+  try {
+    const log = await prisma.identityVerificationLog.findFirst({
+      where: { idType, idNumber },
+      orderBy: { createdAt: "desc" },
+    });
+    res.json({ success: true, data: log || null });
+  } catch (error: any) {
+    logger.error("Error in identity lookup:", error);
+    res.status(500).json({ success: false, error: "Failed to lookup history" });
+  }
+});
+
 // ── POST /api/v1/identity/bvn/:idNumber ───────────────────────────────────────
 router.post("/bvn/:idNumber", async (req: AuthRequest, res: Response) => {
   const { idNumber } = req.params;
-  const { firstname, lastname, dob, phone, email, gender, submissionId } = req.body;
+  const { firstname, lastname, dob, phone, email, gender, submissionId, forceNew } = req.body;
 
   if (!firstname || !lastname) {
     res.status(400).json({ success: false, error: "firstname and lastname are required" });
@@ -113,10 +129,13 @@ router.post("/bvn/:idNumber", async (req: AuthRequest, res: Response) => {
     const cutoffTime = new Date(Date.now() - CACHE_MS);
 
     // 1. Check Cache
-    const existingLog = await prisma.identityVerificationLog.findFirst({
-      where: { idType: "bvn", idNumber, createdAt: { gte: cutoffTime } },
-      orderBy: { createdAt: "desc" },
-    });
+    let existingLog = null;
+    if (!forceNew) {
+      existingLog = await prisma.identityVerificationLog.findFirst({
+        where: { idType: "bvn", idNumber, createdAt: { gte: cutoffTime } },
+        orderBy: { createdAt: "desc" },
+      });
+    }
 
     let data: any;
     let reference: string;
@@ -188,7 +207,7 @@ router.post("/bvn/:idNumber", async (req: AuthRequest, res: Response) => {
 // ── POST /api/v1/identity/nin/:idNumber ───────────────────────────────────────
 router.post("/nin/:idNumber", async (req: AuthRequest, res: Response) => {
   const { idNumber } = req.params;
-  const { firstname, lastname, middlename, dob, phone, email, gender, submissionId } = req.body;
+  const { firstname, lastname, middlename, dob, phone, email, gender, submissionId, forceNew } = req.body;
 
   if (!firstname || !lastname) {
     res.status(400).json({ success: false, error: "firstname and lastname are required" });
@@ -199,10 +218,13 @@ router.post("/nin/:idNumber", async (req: AuthRequest, res: Response) => {
     const cutoffTime = new Date(Date.now() - CACHE_MS);
 
     // 1. Check Cache
-    const existingLog = await prisma.identityVerificationLog.findFirst({
-      where: { idType: "nin", idNumber, createdAt: { gte: cutoffTime } },
-      orderBy: { createdAt: "desc" },
-    });
+    let existingLog = null;
+    if (!forceNew) {
+      existingLog = await prisma.identityVerificationLog.findFirst({
+        where: { idType: "nin", idNumber, createdAt: { gte: cutoffTime } },
+        orderBy: { createdAt: "desc" },
+      });
+    }
 
     let data: any;
     let reference: string;

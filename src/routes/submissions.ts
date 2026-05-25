@@ -50,7 +50,7 @@ router.get("/my", async (req: AuthRequest, res: Response) => {
   const submissions = await prisma.formSubmission.findMany({
     where: {
       submittedById: req.user.id,
-      status: { notIn: ["Internal Attachment", "Not Approved", "Deleted"] }
+      status: { notIn: ["Internal Attachment", "Not Approved", "Deleted", "Completed"] }
     },
     orderBy: { createdAt: "desc" },
     include: {

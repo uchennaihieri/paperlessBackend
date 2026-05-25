@@ -187,6 +187,21 @@ router.get("/logs", async (req: AuthRequest, res: Response) => {
   res.json({ success: true, data, total, page: parseInt(page), limit: parseInt(limit) });
 });
 
+// ── GET /api/v1/credit-bureau/lookup/:bvn ────────────────────────────────────
+router.get("/lookup/:bvn", async (req: AuthRequest, res: Response) => {
+  const { bvn } = req.params;
+  try {
+    const log = await prisma.creditBureauLog.findFirst({
+      where: { bvn },
+      orderBy: { createdAt: "desc" },
+    });
+    res.json({ success: true, data: log || null });
+  } catch (error: any) {
+    logger.error("Error in CRB lookup:", error);
+    res.status(500).json({ success: false, error: "Failed to lookup history" });
+  }
+});
+
 // ── POST /api/v1/credit-bureau/consumer/bvn ──────────────────────────────────
 router.post("/consumer/bvn", async (req: AuthRequest, res: Response) => {
   const { bvn, enquiryReason = "Credit Check", productId = 45 } = req.body;
