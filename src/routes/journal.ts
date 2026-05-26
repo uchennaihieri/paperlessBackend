@@ -1,7 +1,12 @@
 import { Router, Response } from "express";
 import { Decimal } from "@prisma/client/runtime/library";
+import multer from "multer";
+import * as xlsx from "xlsx";
 import prisma from "../lib/prisma";
 import { authenticate, AuthRequest } from "../middleware/authenticate";
+import { isSharePointEnabled, uploadToSharePoint, downloadFromSharePoint } from "../lib/sharepoint";
+
+const memUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 const router = Router();
 router.use(authenticate as any);
@@ -27,6 +32,17 @@ async function nextJournalId(): Promise<string> {
   if (!last || !last.journalId) return "JE1";
   const num = parseInt(last.journalId.replace("JE", ""), 10);
   return `JE${isNaN(num) ? 1 : num + 1}`;
+}
+
+// ── Helper: generate next uploadId (UJ1, UJ2...) ────────────────────────────────
+async function nextUploadId(): Promise<string> {
+  const last = await prisma.uploadedJournal.findFirst({
+    orderBy: { uploadedAt: "desc" },
+    select: { uploadId: true },
+  });
+  if (!last) return "UJ1";
+  const num = parseInt(last.uploadId.replace("UJ", ""), 10);
+  return `UJ${isNaN(num) ? 1 : num + 1}`;
 }
 
 // ── POST /api/v1/journal ──────────────────────────────────────────────────────
@@ -521,6 +537,277 @@ router.delete("/:id", async (req: AuthRequest, res: Response) => {
 
   await prisma.journalEntry.delete({ where: { id: req.params.id } });
   res.json({ success: true });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── UPLOADED JOURNAL ENDPOINTS ──────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── POST /api/v1/journal/upload ──────────────────────────────────────────────
+// Upload an Excel file as a journal entry. Creates UploadedJournal + two
+// JournalEntry rows (one debit, one credit) that are committed immediately.
+router.post("/upload", memUpload.single("file"), async (req: AuthRequest, res: Response) => {
+  try {
+    const file = req.file;
+    if (!file) {
+      res.status(400).json({ success: false, error: "No file uploaded." });
+      return;
+    }
+
+    const { totalDebit, totalCredit } = req.body;
+    if (totalDebit === undefined || totalCredit === undefined) {
+      res.status(400).json({ success: false, error: "totalDebit and totalCredit are required." });
+      return;
+    }
+
+    const debitVal = parseFloat(totalDebit);
+    const creditVal = parseFloat(totalCredit);
+    if (isNaN(debitVal) || isNaN(creditVal) || debitVal < 0 || creditVal < 0) {
+      res.status(400).json({ success: false, error: "totalDebit and totalCredit must be valid positive numbers." });
+      return;
+    }
+
+    // Access: accountant only
+    const isAccountant = (req.user?.specialAccess ?? "").toLowerCase().includes("accountant");
+    if (!isAccountant) {
+      res.status(403).json({ success: false, error: "Only accountants can upload journal files." });
+      return;
+    }
+
+    const uploadId = await nextUploadId();
+    const originalName = file.originalname || "journal.xlsx";
+    const spFileName = `${uploadId}_${originalName}`;
+    const folder = `${process.env.SHAREPOINT_UPLOAD_FOLDER ?? "uploads"}/journal-uploads`;
+
+    let sharepointPath = `${folder}/${spFileName}`;
+
+    // Upload to SharePoint if enabled
+    if (isSharePointEnabled()) {
+      sharepointPath = await uploadToSharePoint(
+        file.buffer,
+        spFileName,
+        file.mimetype || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        folder
+      );
+    }
+
+    // Create the UploadedJournal record
+    const uploaded = await prisma.uploadedJournal.create({
+      data: {
+        uploadId,
+        fileName: originalName,
+        sharepointPath,
+        totalDebit: new Decimal(debitVal),
+        totalCredit: new Decimal(creditVal),
+        uploadedBy: req.user?.email ?? "Unknown",
+      },
+    });
+
+    // Create TWO JournalEntry rows (committed immediately)
+    const journalId = await nextJournalId();
+    const createdEntries = [];
+
+    if (debitVal > 0) {
+      const entryId1 = await nextEntryId();
+      const debitEntry = await prisma.journalEntry.create({
+        data: {
+          entryId: entryId1,
+          journalId,
+          sessionRef: uploadId,
+          formName: "UPLOADED JOURNAL",
+          type: "debit",
+          accountCode: "",
+          accountName: "",
+          description: "Uploaded entries",
+          amount: new Decimal(debitVal),
+          createdBy: req.user?.email ?? "Unknown",
+          committed: true,
+          uploadedJournalId: uploaded.id,
+        },
+      });
+      createdEntries.push(debitEntry);
+    }
+
+    if (creditVal > 0) {
+      const entryId2 = await nextEntryId();
+      const creditEntry = await prisma.journalEntry.create({
+        data: {
+          entryId: entryId2,
+          journalId,
+          sessionRef: uploadId,
+          formName: "UPLOADED JOURNAL",
+          type: "credit",
+          accountCode: "",
+          accountName: "",
+          description: "Uploaded entries",
+          amount: new Decimal(creditVal),
+          createdBy: req.user?.email ?? "Unknown",
+          committed: true,
+          uploadedJournalId: uploaded.id,
+        },
+      });
+      createdEntries.push(creditEntry);
+    }
+
+    res.status(201).json({ success: true, data: uploaded, entries: createdEntries });
+  } catch (err: any) {
+    console.error("Error uploading journal:", err);
+    res.status(500).json({ success: false, error: err.message || "Failed to upload journal." });
+  }
+});
+
+// ── GET /api/v1/journal/uploads ──────────────────────────────────────────────
+// List the latest 10 uploaded journals (for treater selection dropdown).
+router.get("/uploads", async (req: AuthRequest, res: Response) => {
+  try {
+    const uploads = await prisma.uploadedJournal.findMany({
+      orderBy: { uploadedAt: "desc" },
+      take: 10,
+    });
+    res.json({ success: true, data: uploads });
+  } catch (err: any) {
+    console.error("Error fetching uploaded journals:", err);
+    res.status(500).json({ success: false, error: "Failed to fetch uploaded journals." });
+  }
+});
+
+// ── GET /api/v1/journal/uploads/content/:id ──────────────────────────────────
+// Download the Excel from SharePoint, parse it, and return the rows as JSON.
+router.get("/uploads/content/:id", async (req: AuthRequest, res: Response) => {
+  try {
+    const upload = await prisma.uploadedJournal.findUnique({ where: { id: req.params.id } });
+    if (!upload) {
+      res.status(404).json({ success: false, error: "Uploaded journal not found." });
+      return;
+    }
+
+    if (!isSharePointEnabled()) {
+      res.status(501).json({ success: false, error: "SharePoint is not configured." });
+      return;
+    }
+
+    const { buffer } = await downloadFromSharePoint(upload.sharepointPath);
+    const workbook = xlsx.read(buffer, { type: "buffer" });
+
+    // Parse all sheets into an object: { sheetName: rows[] }
+    const sheets: Record<string, any[]> = {};
+    for (const sheetName of workbook.SheetNames) {
+      const ws = workbook.Sheets[sheetName];
+      sheets[sheetName] = xlsx.utils.sheet_to_json(ws, { defval: "" });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        uploadId: upload.uploadId,
+        fileName: upload.fileName,
+        sheets,
+      },
+    });
+  } catch (err: any) {
+    console.error("Error fetching uploaded journal content:", err);
+    res.status(500).json({ success: false, error: err.message || "Failed to fetch journal content." });
+  }
+});
+
+// ── PATCH /api/v1/journal/uploads/:id/link ───────────────────────────────────
+// Link (or unlink) an uploaded journal to a form session.
+// Body: { sessionRef: "PCL1" } to link, or { sessionRef: null } to unlink.
+router.patch("/uploads/:id/link", async (req: AuthRequest, res: Response) => {
+  try {
+    const { sessionRef } = req.body;
+    const upload = await prisma.uploadedJournal.findUnique({ where: { id: req.params.id } });
+    if (!upload) {
+      res.status(404).json({ success: false, error: "Uploaded journal not found." });
+      return;
+    }
+
+    // Access: accountant only
+    const isAccountant = (req.user?.specialAccess ?? "").toLowerCase().includes("accountant");
+    if (!isAccountant) {
+      res.status(403).json({ success: false, error: "Only accountants can link journal uploads." });
+      return;
+    }
+
+    // If linking to a sessionRef, verify the form exists and caller is the assigned treater
+    if (sessionRef) {
+      const submission = await prisma.formSubmission.findFirst({
+        where: { reference: sessionRef },
+        select: { treaterEmail: true, status: true },
+      });
+      if (!submission) {
+        res.status(404).json({ success: false, error: `Form ${sessionRef} not found.` });
+        return;
+      }
+      const isAssignedTreater = submission.status.startsWith("Assigned") &&
+        submission.treaterEmail?.toLowerCase() === req.user?.email?.toLowerCase();
+      const isFinalApprover = submission.status === "Awaiting Final Approval";
+      if (!isAssignedTreater && !isFinalApprover) {
+        res.status(403).json({ success: false, error: "Only the assigned treater can link a journal." });
+        return;
+      }
+
+      // Unlink any other upload currently linked to this sessionRef
+      await prisma.uploadedJournal.updateMany({
+        where: { linkedSessionRef: sessionRef, id: { not: upload.id } },
+        data: { linkedSessionRef: null },
+      });
+    }
+
+    const updated = await prisma.uploadedJournal.update({
+      where: { id: req.params.id },
+      data: { linkedSessionRef: sessionRef ?? null },
+    });
+
+    res.json({ success: true, data: updated });
+  } catch (err: any) {
+    console.error("Error linking journal upload:", err);
+    res.status(500).json({ success: false, error: err.message || "Failed to link journal." });
+  }
+});
+
+// ── GET /api/v1/journal/uploads/linked/:sessionRef ──────────────────────────
+// Get the uploaded journal linked to a specific form session (for approver auto-display).
+router.get("/uploads/linked/:sessionRef", async (req: AuthRequest, res: Response) => {
+  try {
+    const upload = await prisma.uploadedJournal.findFirst({
+      where: { linkedSessionRef: req.params.sessionRef },
+    });
+    res.json({ success: true, data: upload });
+  } catch (err: any) {
+    console.error("Error fetching linked journal:", err);
+    res.status(500).json({ success: false, error: "Failed to fetch linked journal." });
+  }
+});
+
+// ── DELETE /api/v1/journal/uploads/:id ───────────────────────────────────────
+// Delete an uploaded journal and its associated ledger entries.
+router.delete("/uploads/:id", async (req: AuthRequest, res: Response) => {
+  try {
+    const upload = await prisma.uploadedJournal.findUnique({ where: { id: req.params.id } });
+    if (!upload) {
+      res.status(404).json({ success: false, error: "Uploaded journal not found." });
+      return;
+    }
+
+    // Access: accountant only
+    const isAccountant = (req.user?.specialAccess ?? "").toLowerCase().includes("accountant");
+    if (!isAccountant) {
+      res.status(403).json({ success: false, error: "Only accountants can delete uploaded journals." });
+      return;
+    }
+
+    // Delete associated journal entries first (FK constraint)
+    await prisma.journalEntry.deleteMany({ where: { uploadedJournalId: upload.id } });
+
+    // Delete the upload record
+    await prisma.uploadedJournal.delete({ where: { id: upload.id } });
+
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error("Error deleting uploaded journal:", err);
+    res.status(500).json({ success: false, error: err.message || "Failed to delete uploaded journal." });
+  }
 });
 
 export default router;

@@ -278,26 +278,29 @@ model FormAccess {
 
 // Global double-entry journal ledger
 model JournalEntry {
-  id           String   @id @default(cuid())
-  entryId      String   @unique // "jv1", "jv2"... globally sequential
-  journalId    String?  @db.VarChar(50) // "JE1", "JE2"... grouping ID for saved lines
-  committed    Boolean  @default(false) // false = pending (not in global view), true = approved
-  sessionRef   String   // Form reference number (e.g. "PCL1") — no FK, plain string
-  formName     String   // Copied from form for display/search
-  type         String   // "debit" | "credit"
-  accountCode  String
-  accountName  String
-  batchNumber  String?
-  branch       String?
-  description  String
-  amount       Decimal  @db.Decimal(18, 2)
-  createdBy    String   // Email of officer
-  date         DateTime @default(now())
-  batchGroupId String?  // UUID shared across linked sessions (cross-form balancing)
+  id                 String   @id @default(cuid())
+  entryId            String   @unique // "jv1", "jv2"... globally sequential
+  journalId          String?  @db.VarChar(50) // "JE1", "JE2"... grouping ID for saved lines
+  committed          Boolean  @default(false) // false = pending (not in global view), true = approved
+  sessionRef         String   // Form reference number (e.g. "PCL1") — no FK, plain string
+  formName           String   // Copied from form for display/search
+  type               String   // "debit" | "credit"
+  accountCode        String
+  accountName        String
+  batchNumber        String?
+  branch             String?
+  description        String
+  amount             Decimal  @db.Decimal(18, 2)
+  createdBy          String   // Email of officer
+  date               DateTime @default(now())
+  batchGroupId       String?  // UUID shared across linked sessions (cross-form balancing)
+  uploadedJournalId  String?  // FK to UploadedJournal (set for entries created from an Excel upload)
+  uploadedJournal    UploadedJournal? @relation(fields: [uploadedJournalId], references: [id])
 
   @@index([sessionRef])
   @@index([committed])
   @@index([batchGroupId])
+  @@index([uploadedJournalId])
   @@map("journal_entries")
 }
 
@@ -389,4 +392,23 @@ model AppVersion {
   updatedAt   DateTime @updatedAt
 
   @@map("app_versions")
+}
+
+// Uploaded Excel journal files — metadata stored here, file in SharePoint
+model UploadedJournal {
+  id               String   @id @default(cuid())
+  uploadId         String   @unique       // "UJ1", "UJ2"... sequential human-readable ID
+  fileName         String                 // Original filename (e.g. "Q1_Journal.xlsx")
+  sharepointPath   String                 // Path in SharePoint (e.g. "uploads/journal-uploads/UJ1_Q1.xlsx")
+  totalDebit       Decimal  @db.Decimal(18, 2)  // Manually entered by uploader
+  totalCredit      Decimal  @db.Decimal(18, 2)  // Manually entered by uploader
+  uploadedBy       String                 // Email of the uploader
+  uploadedAt       DateTime @default(now())
+  linkedSessionRef String?                // Form reference this upload is tied to (set by treater)
+
+  entries          JournalEntry[]
+
+  @@index([uploadedAt])
+  @@index([linkedSessionRef])
+  @@map("uploaded_journals")
 }
