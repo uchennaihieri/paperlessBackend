@@ -301,7 +301,8 @@ router.post("/:id/complete", async (req: AuthRequest, res: Response) => {
     select: { status: true, reference: true },
   });
 
-  // Block if there are uncommitted journal entries for this form (or its batch)
+  // Block if there are uncommitted journal entries for this form (or its batch) - BYPASSED (Legacy mode)
+  /*
   if (current?.reference) {
     const batchSample = await prisma.journalEntry.findFirst({
       where: { sessionRef: current.reference, batchGroupId: { not: null } },
@@ -320,6 +321,7 @@ router.post("/:id/complete", async (req: AuthRequest, res: Response) => {
       return;
     }
   }
+  */
   const treaterUser = await prisma.user.findFirst({
     where: { finca_email: { equals: email!, mode: "insensitive" } },
     select: { user_name: true },
