@@ -162,7 +162,7 @@ export async function generateSubmissionPdf(id: string): Promise<{ buffer: Buffe
           const browser = await launchBrowser();
 
           const pg = await browser.newPage();
-          await pg.setContent(html, { waitUntil: "networkidle0" });
+          await pg.setContent(html, { waitUntil: "domcontentloaded", timeout: 15_000 });
           const pdfBuffer = await pg.pdf({ format: "A4", printBackground: true });
           await browser.close();
 
@@ -423,7 +423,7 @@ export async function generateContractPdf(contractRequestId: string, drawnSignat
   const browser = await launchBrowser();
 
   const page = await browser.newPage();
-  await page.setContent(html, { waitUntil: "networkidle0" });
+  await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 15_000 });
   const pdfBuffer = await page.pdf({ format: "A4", printBackground: true });
   await browser.close();
 
