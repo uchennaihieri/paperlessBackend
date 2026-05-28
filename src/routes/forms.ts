@@ -18,14 +18,27 @@ router.get("/", async (req: AuthRequest, res: Response) => {
   if (isAdmin) {
     templates = await prisma.formTemplate.findMany({ orderBy: { createdAt: "asc" } });
   } else {
-    // Only return forms the user has been explicitly assigned to
+    const branch = req.user?.branch ?? "";
+
+    // Only return forms the user has been explicitly assigned to OR if the form owner matches their branch
     const accessRecords = await prisma.formAccess.findMany({
       where: { userEmail: email },
       select: { templateId: true }
     });
     const templateIds = accessRecords.map(a => a.templateId);
+    
+    const whereClause: any = { isInternal: false };
+    if (branch) {
+      whereClause.OR = [
+        { id: { in: templateIds } },
+        { formOwner: branch }
+      ];
+    } else {
+      whereClause.id = { in: templateIds };
+    }
+
     templates = await prisma.formTemplate.findMany({
-      where: { id: { in: templateIds }, isInternal: false },
+      where: whereClause,
       orderBy: { createdAt: "asc" }
     });
   }
@@ -152,14 +165,27 @@ router.get("/excel-enabled", async (req: AuthRequest, res: Response) => {
       orderBy: { name: "asc" } 
     });
   } else {
-    // Return excel-enabled forms the user has access to
+    const branch = req.user?.branch ?? "";
+
+    // Return excel-enabled forms the user has access to or if their branch matches the form owner
     const accessRecords = await prisma.formAccess.findMany({
       where: { userEmail: email },
       select: { templateId: true }
     });
     const templateIds = accessRecords.map(a => a.templateId);
+    
+    const whereClause: any = { generatesExcel: true };
+    if (branch) {
+      whereClause.OR = [
+        { id: { in: templateIds } },
+        { formOwner: branch }
+      ];
+    } else {
+      whereClause.id = { in: templateIds };
+    }
+
     templates = await prisma.formTemplate.findMany({
-      where: { id: { in: templateIds }, generatesExcel: true },
+      where: whereClause,
       orderBy: { name: "asc" }
     });
   }
@@ -180,18 +206,25 @@ router.get("/:id", async (req: AuthRequest, res: Response) => {
   const email = req.user?.email?.toLowerCase() ?? "";
 
   if (!isAdmin) {
-    // Check if the user has access to this specific form
-    const access = await prisma.formAccess.findUnique({
-      where: {
-        templateId_userEmail: {
-          templateId: req.params.id,
-          userEmail: email,
+    const branch = req.user?.branch ?? "";
+    
+    // Check if the user's branch matches the form owner
+    if (branch && template.formOwner === branch) {
+      // Access granted
+    } else {
+      // Check if the user has access to this specific form
+      const access = await prisma.formAccess.findUnique({
+        where: {
+          templateId_userEmail: {
+            templateId: req.params.id,
+            userEmail: email,
+          }
         }
+      });
+      if (!access) {
+        res.status(403).json({ success: false, error: "You do not have access to this form." });
+        return;
       }
-    });
-    if (!access) {
-      res.status(403).json({ success: false, error: "You do not have access to this form." });
-      return;
     }
   }
 

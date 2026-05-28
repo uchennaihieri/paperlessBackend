@@ -700,49 +700,14 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
     }
 
     checkAndUnblockPrerequisites(req.params.id);
-    setImmediate(async () => {
-      try {
-        const pdfResult = await generateSubmissionPdf(req.params.id);
-        if (!pdfResult) return;
-
-        const formFolder = updatedSubmission.formName.replace(/[\\/:*?"<>|]/g, "").trim().toUpperCase();
-        const refFolder = updatedSubmission.reference?.replace(/[\\/:*?"<>|]/g, "").trim().toUpperCase()
-          || updatedSubmission.id.slice(-6).toUpperCase();
-        let storedPath = "";
-
-        if (isSharePointEnabled()) {
-          storedPath = await uploadToSharePoint(
-            pdfResult.buffer, pdfResult.filename, "application/pdf",
-            `${process.env.SHAREPOINT_UPLOAD_FOLDER ?? "uploads"}/${formFolder}/${refFolder}`
-          );
-        }
-
-        if (storedPath) {
-          const created = await prisma.submissionDocument.create({
-            data: {
-              submissionId: updatedSubmission.id,
-              fieldName: "CompletedFormPDF",
-              originalName: pdfResult.filename,
-              filePath: storedPath,
-              mimeType: "application/pdf",
-              size: pdfResult.buffer.length,
-            },
-          });
-
-          const resData = (updatedSubmission.formResponses as Record<string, any>) || {};
-          resData["CompletedFormPDF"] = [
-            { isAttachment: true, name: pdfResult.filename, url: `/api/v1/file?docId=${created.id}` },
-          ];
-          await prisma.formSubmission.update({
-            where: { id: req.params.id },
-            data: { formResponses: resData },
-          });
-          console.info(`[pdf] Generated and stored: ${pdfResult.filename}`);
-        }
-      } catch (err) {
-        console.error("[pdf] Background generation failed:", err);
-      }
+    // Queue PDF generation for the background worker
+    await prisma.pdfJobQueue.create({
+      data: {
+        sourceSubmissionId: req.params.id,
+        jobType: "MainForm",
+      },
     });
+    console.info(`[pdf] Queued PDF generation for submission ${req.params.id}`);
   } else if (unsigned === 0) {
     // No PDF, but still need contract + prerequisite unblocking
     if (currentForSign?.template?.needsContract && currentForSign.template.contractTemplateId && currentForSign.submittedBy?.finca_email) {
@@ -1002,24 +967,15 @@ router.post("/:id/generate-pdf", async (req: AuthRequest, res: Response) => {
 
     const formFolder = submission.formName.replace(/[\\/:*?"<>|]/g, "").trim().toUpperCase();
     const refFolder = submission.reference?.replace(/[\\/:*?"<>|]/g, "").trim().toUpperCase() || submission.id.slice(-6).toUpperCase();
-    let storedPath: string = "";
-
-    if (isSharePointEnabled()) {
-      const folder = `${process.env.SHAREPOINT_UPLOAD_FOLDER ?? "uploads"}/${formFolder}/${refFolder}`;
-      storedPath = await uploadToSharePoint(
-        pdfResult.buffer,
-        pdfResult.filename,
-        "application/pdf",
-        folder
-      );
-    } else {
-      const uploadDir = process.env.UPLOAD_DIR ?? "C:\\Users\\USER\\uploads";
-      const targetDir = path.join(uploadDir, formFolder, refFolder);
-      await fs.mkdir(targetDir, { recursive: true });
-      const destPath = path.join(targetDir, pdfResult.filename);
-      await fs.writeFile(destPath, pdfResult.buffer);
-      storedPath = destPath;
-    }
+    const folder = process.env.SHAREPOINT_UPLOAD_FOLDER 
+      ? `${process.env.SHAREPOINT_UPLOAD_FOLDER}/${formFolder}/${refFolder}`
+      : `${formFolder}/${refFolder}`;
+    const storedPath: string = await uploadToSharePoint(
+      pdfResult.buffer,
+      pdfResult.filename,
+      "application/pdf",
+      folder
+    );
 
     if (storedPath) {
       const created = await prisma.submissionDocument.create({
@@ -1211,6 +1167,53 @@ export async function notifySuccessfulCompletion(submissionId: string) {
     }).catch((e: any) => console.error("[notify successful completion email error]", e));
   } catch (err) {
     console.error("[notifySuccessfulCompletion] error:", err);
+  }
+}
+
+export async function notifySubmitterOfSubmission(submissionId: string) {
+  try {
+    const submission = await prisma.formSubmission.findUnique({
+      where: { id: submissionId },
+      include: {
+        submittedBy: { select: { user_name: true, finca_email: true } },
+      },
+    });
+
+    const submittedBy = submission?.submittedBy;
+    if (!submission || !submittedBy?.finca_email) return;
+
+    const emailTo = submittedBy.finca_email;
+    const userName = submittedBy.user_name ?? "there";
+    const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
+
+    console.info(`[notifySubmitterOfSubmission] Sending submission confirmation email for submission ${submissionId} to submitter ${emailTo}`);
+
+    await mailer.sendMail({
+      from: `FINCALite <${process.env.SMTP_FROM ?? process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
+      to: emailTo,
+      subject: `Submission Confirmation: "${submission.formName}"`,
+      html: `
+          <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
+            <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
+            <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
+            <hr style="border-color: #e5e7eb; margin: 20px 0;" />
+            <p style="font-size: 15px; color: #111827;">Hi <strong>${userName}</strong>,</p>
+            <p style="font-size: 14px; color: #374151;">
+              We have successfully received your submission.
+            </p>
+            <div style="background: #f9fafb; border-left: 4px solid #B50938; border-radius: 4px; padding: 16px; margin: 16px 0;">
+              <p style="margin: 0; font-weight: 600; color: #111827;">${submission.formName}</p>
+              <p style="margin: 4px 0 0; font-size: 13px; color: #6b7280;">Reference: ${submission.reference ?? "N/A"}</p>
+            </div>
+            <a href="${appUrl}/dashboard/forms/submission/${submission.id}" style="display: inline-block; background: #B50938; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; margin-top: 8px;">View Submission</a>
+            <p style="font-size: 12px; color: #9ca3af; margin-top: 24px;">If you believe this was sent in error, please contact your administrator.</p>
+          </div>
+      `,
+    }).then(() => {
+      console.info(`[notifySubmitterOfSubmission] Submission confirmation email successfully sent to ${emailTo}`);
+    }).catch((e: any) => console.error("[notify submitter email error]", e));
+  } catch (err) {
+    console.error("[notifySubmitterOfSubmission] error:", err);
   }
 }
 

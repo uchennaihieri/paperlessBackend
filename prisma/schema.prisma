@@ -35,6 +35,7 @@ model User {
   signature        String?
   submissions      FormSubmission[]
   devices          DeviceRegistration[]
+  notificationPreferences Json?
 
   @@map("users")
 }
@@ -411,4 +412,21 @@ model UploadedJournal {
   @@index([uploadedAt])
   @@index([linkedSessionRef])
   @@map("uploaded_journals")
+}
+
+model PdfJobQueue {
+  id                 String   @id @default(uuid())
+  sourceSubmissionId String   
+  jobType            String   // "MainForm" or "InternalForm"
+  
+  targetSubmissionId String?  
+  targetFieldName    String?  
+  
+  status             String   @default("Pending") // "Pending", "Processing", "Completed", "Failed"
+  errorMsg           String?
+  attempts           Int      @default(0)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@map("pdf_job_queue")
 }

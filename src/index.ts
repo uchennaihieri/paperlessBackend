@@ -7,6 +7,7 @@ import compression from "compression";
 import morgan from "morgan";
 
 import { logger } from "./lib/logger";
+import { startPdfWorker } from "./lib/pdfWorker";
 import { errorHandler } from "./middleware/errorHandler";
 import { notFound } from "./middleware/notFound";
 
@@ -129,6 +130,7 @@ app.use(errorHandler);
 
 app.listen(Number(PORT), "0.0.0.0", () => {
   logger.info(`🚀 Paperless API listening on port ${PORT}`);
+  startPdfWorker();
 });
 
 export default app;

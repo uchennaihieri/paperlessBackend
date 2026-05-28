@@ -97,13 +97,13 @@ export async function uploadToSharePoint(
   buffer: Buffer,
   fileName: string,
   mimeType: string,
-  folder: string = process.env.SHAREPOINT_UPLOAD_FOLDER ?? "uploads"
+  folder: string = process.env.SHAREPOINT_UPLOAD_FOLDER || ""
 ): Promise<string> {
   const token  = await getAccessToken();
   const siteId = await getSiteId();
 
   // Relative path within the document library root
-  const drivePath = `${folder}/${fileName}`;
+  const drivePath = folder ? `${folder}/${fileName}` : fileName;
 
   const res = await fetch(
     `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/root:/${drivePath}:/content`,

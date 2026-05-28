@@ -7,8 +7,7 @@ import { authenticate, AuthRequest } from "../middleware/authenticate";
 import { hashToken, decrypt } from "../lib/crypto";
 import { isSharePointEnabled, uploadToSharePoint, downloadFromSharePoint } from "../lib/sharepoint";
 import { mailer } from "../lib/mailer";
-import { generateSubmissionPdf } from "../lib/pdfGenerator";
-import { checkAndUnblockPrerequisites, notifyActiveSignatories, notifySuccessfulCompletion } from "./workflow";
+import { checkAndUnblockPrerequisites, notifyActiveSignatories, notifySuccessfulCompletion, notifySubmitterOfSubmission } from "./workflow";
 
 // Files are always buffered in memory; they go straight to SharePoint (or disk)
 // on submission — never stored in a temp location.
@@ -401,26 +400,16 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
 
       if (pdfPath) {
         let buf: Buffer;
-        if (isSharePointEnabled()) {
-          const { buffer } = await downloadFromSharePoint(pdfPath);
-          buf = buffer;
-        } else {
-          buf = await fs.readFile(path.join(process.env.UPLOAD_DIR ?? "C:\\Users\\USER\\uploads", pdfPath));
-        }
+        const { buffer } = await downloadFromSharePoint(pdfPath);
+        buf = buffer;
 
-        let storedPath: string;
-        if (isSharePointEnabled()) {
-          storedPath = await uploadToSharePoint(
-            buf, originalFilename, "application/pdf", `${process.env.SHAREPOINT_UPLOAD_FOLDER ?? "uploads"}/${formFolder}/${refFolder}`
-          );
-        } else {
-          const uploadDir = process.env.UPLOAD_DIR ?? "C:\\Users\\USER\\uploads";
-          const targetDir = path.join(uploadDir, formFolder, refFolder);
-          await fs.mkdir(targetDir, { recursive: true });
-          const destPath = path.join(targetDir, originalFilename);
-          await fs.writeFile(destPath, buf);
-          storedPath = destPath;
-        }
+        const folder = process.env.SHAREPOINT_UPLOAD_FOLDER 
+          ? `${process.env.SHAREPOINT_UPLOAD_FOLDER}/${formFolder}/${refFolder}`
+          : `${formFolder}/${refFolder}`;
+
+        const storedPath = await uploadToSharePoint(
+          buf, originalFilename, "application/pdf", folder
+        );
 
         docCreates.push({
           fieldName: field.label,
@@ -470,6 +459,8 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
 
 
 
+  const createdGhostForms: Array<{ ghostId: string, fieldName: string }> = [];
+
   for (const task of internalFormTasks) {
     // 1. Create a Ghost Submission (auto-signed by the logged in user)
     const ghostSub = await prisma.formSubmission.create({
@@ -493,40 +484,12 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
       }
     });
 
-    // 2. Generate PDF
-    const pdfResult = await generateSubmissionPdf(ghostSub.id);
-    if (!pdfResult) continue;
-
-    const originalFilename = pdfResult.filename;
-    let storedPath: string;
-
-    if (isSharePointEnabled()) {
-      storedPath = await uploadToSharePoint(
-        pdfResult.buffer,
-        originalFilename,
-        "application/pdf",
-        `${process.env.SHAREPOINT_UPLOAD_FOLDER ?? "uploads"}/${formFolder}/${refFolder}`
-      );
-    } else {
-      const uploadDir = process.env.UPLOAD_DIR ?? "C:\\Users\\USER\\uploads";
-      const targetDir = path.join(uploadDir, formFolder, refFolder);
-      await fs.mkdir(targetDir, { recursive: true });
-      storedPath = path.join(targetDir, originalFilename);
-      await fs.writeFile(storedPath, pdfResult.buffer);
-    }
-
-    docCreates.push({
-      fieldName: task.fieldName,
-      originalName: originalFilename,
-      filePath: storedPath,
-      mimeType: "application/pdf",
-      size: pdfResult.buffer.length,
-    });
+    createdGhostForms.push({ ghostId: ghostSub.id, fieldName: task.fieldName });
 
     if (!internalAttachments[task.fieldName]) {
       internalAttachments[task.fieldName] = [];
     }
-    internalAttachments[task.fieldName].push({ isAttachment: true, name: originalFilename, url: "__pending__" });
+    internalAttachments[task.fieldName].push({ isAttachment: true, name: task.templateName + " PDF", url: "__generating_pdf__" });
   }
 
   // Merge internal attachments back into updatedResponses
@@ -554,26 +517,17 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
       const attachments: Array<{ isAttachment: true; name: string; url: string }> = [];
 
       for (const file of files) {
-        let storedPath: string;
-
-        if (isSharePointEnabled()) {
-          // SharePoint folder: {SHAREPOINT_UPLOAD_FOLDER}/PETTY CASH LIVE/PCL1
-          const folder = `${process.env.SHAREPOINT_UPLOAD_FOLDER ?? "uploads"}/${formFolder}/${refFolder}`;
-          storedPath = await uploadToSharePoint(
-            file.buffer,
-            file.originalname,
-            file.mimetype || "application/octet-stream",
-            folder
-          );
-        } else {
-          // Local disk: {UPLOAD_DIR}/PETTY CASH LIVE/PCL1/file.pdf
-          const uploadDir = process.env.UPLOAD_DIR ?? "C:\\Users\\USER\\uploads";
-          const targetDir = path.join(uploadDir, formFolder, refFolder);
-          await fs.mkdir(targetDir, { recursive: true });
-          const destPath = path.join(targetDir, file.originalname);
-          await fs.writeFile(destPath, file.buffer);
-          storedPath = destPath;
-        }
+        // SharePoint folder: {SHAREPOINT_UPLOAD_FOLDER}/PETTY CASH LIVE/PCL1 (or root if not set)
+        const folder = process.env.SHAREPOINT_UPLOAD_FOLDER
+          ? `${process.env.SHAREPOINT_UPLOAD_FOLDER}/${formFolder}/${refFolder}`
+          : `${formFolder}/${refFolder}`;
+          
+        const storedPath = await uploadToSharePoint(
+          file.buffer,
+          file.originalname,
+          file.mimetype || "application/octet-stream",
+          folder
+        );
 
         // Queue the SubmissionDocument record (created after the submission row exists)
         docCreates.push({
@@ -681,59 +635,31 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
     },
   }).catch((e: any) => console.error("[audit] submit:", e));
 
+  // ── Enqueue PDF generation jobs for any internal ghost forms ──
+  for (const ghost of createdGhostForms) {
+    await prisma.pdfJobQueue.create({
+      data: {
+        sourceSubmissionId: ghost.ghostId,
+        jobType: "InternalForm",
+        targetSubmissionId: submission.id,
+        targetFieldName: ghost.fieldName,
+      }
+    });
+    console.info(`[pdf] Queued Internal PDF generation for ghost ${ghost.ghostId}`);
+  }
+
   // ── Background: generate + store the PDF if fully signed at submission ──
   // Only if the form template has a PDF generator type configured (not "none")
   if (isFullySigned && submissionPdfType !== "none") {
     checkAndUnblockPrerequisites(submission.id);
-    setImmediate(async () => {
-      try {
-        const pdfResult = await generateSubmissionPdf(submission.id);
-        if (!pdfResult) return;
-
-        const formFolder = submission.formName.replace(/[\\/:*?"<>|]/g, "").trim().toUpperCase();
-        const refFolder = submission.reference?.replace(/[\\/:*?"<>|]/g, "").trim().toUpperCase() || submission.id.slice(-6).toUpperCase();
-        let storedPath = "";
-
-        if (isSharePointEnabled()) {
-          storedPath = await uploadToSharePoint(
-            pdfResult.buffer, pdfResult.filename, "application/pdf",
-            `${process.env.SHAREPOINT_UPLOAD_FOLDER ?? "uploads"}/${formFolder}/${refFolder}`
-          );
-        } else {
-          const uploadDir = process.env.UPLOAD_DIR ?? "C:\\Users\\USER\\uploads";
-          const targetDir = path.join(uploadDir, formFolder, refFolder);
-          await fs.mkdir(targetDir, { recursive: true });
-          const destPath = path.join(targetDir, pdfResult.filename);
-          await fs.writeFile(destPath, pdfResult.buffer);
-          storedPath = destPath;
-        }
-
-        if (storedPath) {
-          const created = await prisma.submissionDocument.create({
-            data: {
-              submissionId: submission.id,
-              fieldName: "CompletedFormPDF",
-              originalName: pdfResult.filename,
-              filePath: storedPath,
-              mimeType: "application/pdf",
-              size: pdfResult.buffer.length,
-            },
-          });
-
-          const resData = (submission.formResponses as Record<string, any>) || {};
-          resData["CompletedFormPDF"] = [
-            { isAttachment: true, name: pdfResult.filename, url: `/api/v1/file?docId=${created.id}` },
-          ];
-          await prisma.formSubmission.update({
-            where: { id: submission.id },
-            data: { formResponses: resData },
-          });
-          console.info(`[pdf] Generated and stored: ${pdfResult.filename}`);
-        }
-      } catch (err) {
-        console.error("[pdf] Background generation failed:", err);
-      }
+    // Queue PDF generation for the background worker
+    await prisma.pdfJobQueue.create({
+      data: {
+        sourceSubmissionId: submission.id,
+        jobType: "MainForm",
+      },
     });
+    console.info(`[pdf] Queued PDF generation for submission ${submission.id}`);
   } else if (isFullySigned) {
     // No PDF configured — still unblock prerequisites
     checkAndUnblockPrerequisites(submission.id);
@@ -757,6 +683,9 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
         (f: any) => f.isPrerequisite === true && f.targetFormTemplateId
       );
       if (prereqFields.length === 0) {
+        // Always send submission confirmation to submitter
+        notifySubmitterOfSubmission(submission.id);
+
         if (initialStatus === "Submitted") {
           notifyActiveSignatories(submission.id);
         } else if (initialStatus === "Completed") {
@@ -868,6 +797,9 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
           data: { status: "Blocked - Awaiting Prerequisites" },
         });
       } else {
+        // Send submission confirmation to submitter
+        notifySubmitterOfSubmission(submission.id);
+
         if (initialStatus === "Submitted") {
           notifyActiveSignatories(submission.id);
         } else if (initialStatus === "Completed") {

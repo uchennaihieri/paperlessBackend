@@ -13,7 +13,7 @@ router.post("/register", async (req: AuthRequest, res: Response) => {
   if (!userEmail) { res.status(401).json({ success: false, error: "Not logged in" }); return; }
 
   const { token, signatureBlob } = req.body;
-  
+
   if (!token || token.length < 8) {
     res.status(400).json({ success: false, error: "Token must be at least 8 characters long." });
     return;
@@ -77,6 +77,63 @@ router.get("/my-signature", async (req: AuthRequest, res: Response) => {
 
   const rawSignature = decrypt(data.encryptedSignature);
   res.json({ success: true, signatureData: rawSignature });
+});
+
+// ── GET /api/v1/security/notification-preferences ─────────────────────────────
+router.get("/notification-preferences", async (req: AuthRequest, res: Response) => {
+  const userEmail = req.user?.email;
+  if (!userEmail) { res.status(401).json({ success: false, error: "Not logged in" }); return; }
+
+  const user = await prisma.user.findFirst({
+    where: { finca_email: { equals: userEmail, mode: "insensitive" } }
+  });
+
+  if (!user) {
+    res.status(404).json({ success: false, error: "User not found" });
+    return;
+  }
+
+  const defaultPrefs = {
+    channels: { email: true, teams: false },
+    patterns: {
+      onSubmitForm: false,
+      onToSign: true,
+      onFinalApprover: false,
+      onMyFormSigned: false,
+      onMyFormProcessing: false,
+      onCompleted: true,
+      onBusinessUnitTreat: false,
+      onDeclined: true
+    }
+  };
+
+  const currentPrefs = user.notificationPreferences as any || {};
+  
+  const mergedPrefs = {
+    channels: { ...defaultPrefs.channels, ...(currentPrefs.channels || {}) },
+    patterns: { ...defaultPrefs.patterns, ...(currentPrefs.patterns || {}) }
+  };
+
+  res.json({ success: true, preferences: mergedPrefs });
+});
+
+// ── POST /api/v1/security/notification-preferences ────────────────────────────
+router.post("/notification-preferences", async (req: AuthRequest, res: Response) => {
+  const userEmail = req.user?.email;
+  if (!userEmail) { res.status(401).json({ success: false, error: "Not logged in" }); return; }
+
+  const { preferences } = req.body;
+  if (!preferences) {
+    res.status(400).json({ success: false, error: "Missing preferences payload" });
+    return;
+  }
+
+  await prisma.user.updateMany({
+    where: { finca_email: { equals: userEmail, mode: "insensitive" } },
+    data: { notificationPreferences: preferences }
+  });
+
+  res.json({ success: true });
 });
 
 export default router;
