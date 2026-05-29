@@ -214,6 +214,33 @@ router.put("/:id/alias", async (req: AuthRequest, res: Response) => {
   }
 });
 
+// ── GET /api/v1/submissions/prefill-candidates/:templateId ────────────────────
+// Returns lightweight submission records for a given template, suitable for the
+// "Prefill from previous" dropdown on the form filler page.
+router.get("/prefill-candidates/:templateId", async (req, res: Response) => {
+  try {
+    const submissions = await prisma.formSubmission.findMany({
+      where: {
+        templateId: req.params.templateId,
+        status: { notIn: ["Draft", "Internal Attachment", "Deleted", "Not Approved"] },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+      select: {
+        id: true,
+        reference: true,
+        formName: true,
+        createdAt: true,
+        submittedBy: { select: { user_name: true } },
+      },
+    });
+    res.json({ success: true, data: submissions });
+  } catch (err: any) {
+    console.error("Error fetching prefill candidates:", err);
+    res.status(500).json({ success: false, error: err.message || "Failed to fetch prefill candidates" });
+  }
+});
+
 // ── GET /api/v1/submissions/by-reference/:ref ─────────────────────────────────
 // Resolve a form reference code (e.g. "PCL001") to a full submission record.
 // Used by the frontend to turn a "formreference" field value into a clickable link.
@@ -403,7 +430,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
         const { buffer } = await downloadFromSharePoint(pdfPath);
         buf = buffer;
 
-        const folder = process.env.SHAREPOINT_UPLOAD_FOLDER 
+        const folder = process.env.SHAREPOINT_UPLOAD_FOLDER
           ? `${process.env.SHAREPOINT_UPLOAD_FOLDER}/${formFolder}/${refFolder}`
           : `${formFolder}/${refFolder}`;
 
@@ -521,7 +548,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
         const folder = process.env.SHAREPOINT_UPLOAD_FOLDER
           ? `${process.env.SHAREPOINT_UPLOAD_FOLDER}/${formFolder}/${refFolder}`
           : `${formFolder}/${refFolder}`;
-          
+
         const storedPath = await uploadToSharePoint(
           file.buffer,
           file.originalname,
@@ -992,7 +1019,7 @@ router.delete("/:id", async (req: AuthRequest, res: Response) => {
 // Administrator can soft-delete any submission, specifying a reason.
 router.patch("/:id/soft-delete", async (req: AuthRequest, res: Response) => {
   const isSystemAdmin = req.user?.user_role?.toLowerCase() === "administrator" || req.user?.specialAccess?.toLowerCase().includes("administrator");
-  
+
   if (!isSystemAdmin) {
     res.status(403).json({ success: false, error: "Forbidden: Administrators only" });
     return;
