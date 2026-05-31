@@ -30,6 +30,118 @@ async function logAudit(opts: {
   }
 }
 
+// ── Prerequisite Activation Helper ─────────────────────────────────────────────
+export async function activatePrerequisite(prereqId: string, mainSubmissionId: string, targetFormId: string, targetEmail: string) {
+  try {
+    const mainSub = await prisma.formSubmission.findUnique({ where: { id: mainSubmissionId } });
+    const targetTemplate = await prisma.formTemplate.findUnique({ where: { id: targetFormId } });
+    if (!targetTemplate || !mainSub) return;
+
+    const acronym = targetTemplate.name.split(" ").map((w: string) => w[0]).join("").toUpperCase();
+    const latestPrereq = await prisma.formSubmission.findFirst({
+      where: { templateId: targetTemplate.id },
+      orderBy: { createdAt: 'desc' },
+      select: { reference: true }
+    });
+
+    let nextNumber = 1;
+    if (latestPrereq && latestPrereq.reference) {
+      const match = latestPrereq.reference.match(/\d+$/);
+      if (match) {
+        nextNumber = parseInt(match[0], 10) + 1;
+      } else {
+        const count = await prisma.formSubmission.count({ where: { templateId: targetTemplate.id } });
+        nextNumber = count + 1;
+      }
+    }
+    const prereqRef = `${acronym}${nextNumber}`;
+
+    const targetFields: any[] = typeof targetTemplate.fields === "string"
+      ? JSON.parse(targetTemplate.fields)
+      : (targetTemplate.fields || []);
+
+    const prefilledResponses: Record<string, any> = {};
+    const refField = targetFields.find((f: any) =>
+      f.type !== "section_header" && f.type !== "instructions" && f.label.toLowerCase().includes("form reference")
+    );
+    if (refField) {
+      prefilledResponses[refField.id] = mainSub.reference;
+    }
+
+    // Replace the email with the Prerequisite Form Reference in the main form's responses
+    const mainTemplate = await prisma.formTemplate.findUnique({ where: { id: mainSub.templateId } });
+    if (mainTemplate && mainTemplate.fields) {
+      const fields = mainTemplate.fields as any[];
+      const prereqFields = fields.filter((f: any) => f.isPrerequisite === true && f.targetFormTemplateId === targetFormId);
+      
+      let responsesUpdated = false;
+      const resData = mainSub.formResponses as Record<string, any>;
+      for (const pf of prereqFields) {
+          const val = resData[pf.id] ?? resData[pf.label];
+          if (typeof val === "string" && val.trim() === targetEmail) {
+              if (resData[pf.id] !== undefined) resData[pf.id] = prereqRef;
+              if (resData[pf.label] !== undefined) resData[pf.label] = prereqRef;
+              responsesUpdated = true;
+          }
+      }
+      if (responsesUpdated) {
+          await prisma.formSubmission.update({
+              where: { id: mainSubmissionId },
+              data: { formResponses: resData }
+          });
+      }
+    }
+
+    const prereqSub = await prisma.formSubmission.create({
+      data: {
+        formName: targetTemplate.name,
+        reference: prereqRef,
+        formResponses: prefilledResponses,
+        signingType: "sequential",
+        status: "Draft",
+        templateId: targetTemplate.id,
+        submittedById: null,
+      },
+    });
+
+    await prisma.submissionPrerequisite.update({
+      where: { id: prereqId },
+      data: { prereqSubmissionId: prereqSub.id, status: "Active" }
+    });
+
+    const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
+    // NOTE: The UI route may be /draft/ or /submission/, sticking to /draft/ as requested
+    const fillUrl = `${appUrl}/dashboard/forms/draft/${prereqSub.id}`;
+    
+    mailer.sendMail({
+      from: `FINCALite <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
+      to: targetEmail,
+      subject: `Action Required: Please complete the "${targetTemplate.name}" form`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
+          <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
+          <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
+          <hr style="border-color: #e5e7eb; margin: 20px 0;" />
+          <p style="font-size: 15px; color: #111827;">Hello,</p>
+          <p style="font-size: 14px; color: #374151;">
+            You have been requested to complete a prerequisite form before a submission can proceed for approval.
+          </p>
+          <div style="background: #f9fafb; border-left: 4px solid #B50938; border-radius: 4px; padding: 16px; margin: 16px 0;">
+            <p style="margin: 0; font-weight: 600; color: #111827;">${targetTemplate.name}</p>
+            <p style="margin: 4px 0 0; font-size: 13px; color: #6b7280;">Reference: ${prereqRef}</p>
+          </div>
+          <p style="font-size: 14px; color: #374151;">Please click the button below to open and complete your form. You may be asked to log in if you are a registered user.</p>
+          <a href="${fillUrl}" style="display: inline-block; background: #B50938; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; margin-top: 8px;">Open & Complete Form</a>
+          <p style="font-size: 12px; color: #9ca3af; margin-top: 24px;">If you believe this was sent in error, please contact your administrator.</p>
+        </div>
+      `,
+    }).catch((e: any) => console.error("[prereq email]", e));
+
+  } catch (err) {
+    console.error("[prerequisites] Failed to activate prerequisite:", err);
+  }
+}
+
 // ── Prerequisite Unblock Helper ──────────────────────────────────────────────
 export async function checkAndUnblockPrerequisites(prereqSubmissionId: string) {
   setImmediate(async () => {
@@ -46,34 +158,81 @@ export async function checkAndUnblockPrerequisites(prereqSubmissionId: string) {
         data: { status: "Approved" },
       });
 
-      // Check if ALL prerequisites for the main submission are now approved
-      const remaining = await prisma.submissionPrerequisite.count({
-        where: { mainSubmissionId: prereqLink.mainSubmissionId, status: { not: "Approved" } },
+      // Get all prerequisites for the main submission
+      const allPrereqs = await prisma.submissionPrerequisite.findMany({
+        where: { mainSubmissionId: prereqLink.mainSubmissionId },
+        orderBy: { order: "asc" }
       });
 
-      if (remaining === 0) {
+      let nextPendingOrder: number | null = null;
+      let isFullyUnblocked = true;
+
+      for (const p of allPrereqs) {
+        if (p.status !== "Approved") {
+          nextPendingOrder = p.order;
+          isFullyUnblocked = false;
+          break;
+        }
+      }
+
+      if (isFullyUnblocked) {
         // Unblock the main submission
         const mainSub = await prisma.formSubmission.findUnique({
           where: { id: prereqLink.mainSubmissionId },
+          include: { 
+            template: true,
+            prerequisiteFor: {
+              include: { targetForm: { select: { name: true } } }
+            }
+          },
         });
         if (!mainSub || mainSub.status !== "Blocked - Awaiting Prerequisites") return;
 
+        const hasTreater = !!(mainSub.template?.formTreater && mainSub.template.formTreater.toLowerCase() !== "none");
+        const newStatus = hasTreater ? "Processing" : "Completed";
+
         await prisma.formSubmission.update({
           where: { id: prereqLink.mainSubmissionId },
-          data: { status: "Submitted" },
+          data: { status: newStatus },
         });
 
         await logAudit({
           submissionId: prereqLink.mainSubmissionId,
           formReference: mainSub.reference,
           prevStatus: "Blocked - Awaiting Prerequisites",
-          newStatus: "Submitted",
+          newStatus: newStatus,
           action: "unblocked",
-          note: "All prerequisite forms approved. Submission is now active.",
+          note: `All prerequisite forms approved. Submission moved to ${newStatus}.`,
         });
 
-        // Notify active pending signatories
-        await notifyActiveSignatories(prereqLink.mainSubmissionId);
+        if (newStatus === "Completed") {
+          notifySuccessfulCompletion(prereqLink.mainSubmissionId);
+        }
+
+        // Queue PDF now that prerequisites are cleared and signers are done
+        const pdfGeneratorType = mainSub.template?.pdfGeneratorType ?? "none";
+        if (pdfGeneratorType !== "none") {
+          const isPrereq = !!mainSub.prerequisiteFor;
+          await prisma.pdfJobQueue.create({
+            data: {
+              sourceSubmissionId: mainSub.id,
+              jobType: isPrereq ? "Prerequisite" : "MainForm",
+              targetSubmissionId: isPrereq ? mainSub.prerequisiteFor!.mainSubmissionId : null,
+              targetFieldName: isPrereq ? `PrerequisitePDF:${mainSub.prerequisiteFor!.targetForm.name}` : null,
+            },
+          });
+          console.info(`[pdf] Queued PDF generation for unblocked submission ${mainSub.id}`);
+        }
+        
+        // If this newly unblocked submission is ITSELF a prerequisite for another form, check and unblock that one too!
+        checkAndUnblockPrerequisites(mainSub.id);
+      } else if (nextPendingOrder !== null) {
+        // Find all prerequisites in this nextPendingOrder that are still "Pending"
+        const prereqsToActivate = allPrereqs.filter(p => p.order === nextPendingOrder && p.status === "Pending");
+        
+        for (const prereq of prereqsToActivate) {
+          await activatePrerequisite(prereq.id, prereq.mainSubmissionId, prereq.targetFormId, prereq.targetEmail);
+        }
       }
     } catch (err) {
       console.error("[prerequisites] Failed to check prerequisite unblocking:", err);
@@ -88,7 +247,7 @@ router.get("/queue", async (req: AuthRequest, res: Response) => {
   const email = req.user?.email ?? null;
   if (!email) { res.json({ success: true, data: [] }); return; }
 
-  const [normalItems, finalApprovalItems] = await Promise.all([
+  const [normalItems, finalApprovalItems, prerequisiteItems] = await Promise.all([
     prisma.formSubmission.findMany({
       where: {
         signatories: {
@@ -127,6 +286,26 @@ router.get("/queue", async (req: AuthRequest, res: Response) => {
       },
       orderBy: { createdAt: "desc" },
     }),
+    prisma.submissionPrerequisite.findMany({
+      where: {
+        targetEmail: { equals: email, mode: "insensitive" },
+        status: "Active",
+      },
+      include: {
+        targetForm: true,
+        mainSubmission: {
+          include: {
+            submittedBy: { select: { user_name: true, finca_email: true, branch: true } },
+          }
+        },
+        prereqSubmission: {
+          include: {
+            signatories: true
+          }
+        },
+      },
+      orderBy: { id: "desc" }
+    }),
   ]);
 
   // Filter sequential-signing eligibility
@@ -141,7 +320,22 @@ router.get("/queue", async (req: AuthRequest, res: Response) => {
     );
   });
 
-  res.json({ success: true, data: [...eligible, ...finalApprovalItems] });
+  const prereqMappedItems = prerequisiteItems
+    .filter(p => p.prereqSubmission !== null)
+    .map(p => {
+      // Map to look like a FormSubmission but with extra context
+      return {
+        ...p.prereqSubmission,
+        isPrerequisiteTask: true,
+        prerequisiteContext: {
+          mainSubmissionReference: p.mainSubmission.reference,
+          mainSubmissionName: p.mainSubmission.formName,
+          submittedBy: p.mainSubmission.submittedBy,
+        }
+      };
+    });
+
+  res.json({ success: true, data: [...eligible, ...finalApprovalItems, ...prereqMappedItems] });
 });
 
 // ── GET /api/v1/workflow/search-users ─────────────────────────────────────────
@@ -163,6 +357,46 @@ router.get("/search-users", async (req, res: Response) => {
   res.json({ success: true, data: users });
 });
 
+// ── GET /api/v1/workflow/resolve-assignee ─────────────────────────────────────
+router.get("/resolve-assignee", async (req: AuthRequest, res: Response) => {
+  const { branch, role } = req.query;
+  const where: any = { status: { equals: "active", mode: "insensitive" } };
+  
+  if (branch) {
+    let targetBranch = branch as string;
+    if (targetBranch === "USER BRANCH" && req.user?.email) {
+      const currentUser = await prisma.user.findFirst({
+        where: { finca_email: { equals: req.user.email, mode: "insensitive" } }
+      });
+      if (currentUser?.branch) {
+        targetBranch = currentUser.branch;
+      } else {
+        res.json({ success: true, data: [] });
+        return;
+      }
+    }
+    where.branch = { equals: targetBranch, mode: "insensitive" };
+  }
+  if (role) {
+    const r = role as string;
+    where.OR = [
+      { user_role: { equals: r, mode: "insensitive" } },
+      { specialAccess: { contains: r, mode: "insensitive" } }
+    ];
+  }
+
+  try {
+    const users = await prisma.user.findMany({
+      where,
+      select: { user_name: true, finca_email: true }
+    });
+    res.json({ success: true, data: users });
+  } catch (err) {
+    console.error("[resolve-assignee] Error:", err);
+    res.status(500).json({ success: false, error: "Database error." });
+  }
+});
+
 // ── GET /api/v1/workflow/submissions/:id ──────────────────────────────────────
 router.get("/submissions/:id", async (req, res: Response) => {
   const sub = await prisma.formSubmission.findUnique({
@@ -173,6 +407,13 @@ router.get("/submissions/:id", async (req, res: Response) => {
       submittedBy: { select: { user_name: true, finca_email: true, branch: true } },
       contractRequests: true,
       documents: true,
+      prerequisiteFor: {
+        include: {
+          mainSubmission: {
+            select: { id: true, formName: true, reference: true }
+          }
+        }
+      }
     },
   });
   if (!sub) { res.status(404).json({ success: false, error: "Not found" }); return; }
@@ -645,7 +886,13 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
       reference: true,
       signingType: true,
       template: { select: { needsContract: true, contractTemplateId: true, formTreater: true, pdfGeneratorType: true } },
-      submittedBy: { select: { finca_email: true } }
+      submittedBy: { select: { finca_email: true } },
+      prerequisiteFor: {
+        select: {
+          mainSubmissionId: true,
+          targetForm: { select: { name: true } }
+        }
+      }
     },
   });
 
@@ -657,7 +904,16 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
 
   // If there's no treater branch configured, skip "Processing" and go straight to "Completed"
   const hasTreater = !!(currentForSign?.template?.formTreater && currentForSign.template.formTreater.toLowerCase() !== "none");
-  const newSignStatus = unsigned === 0 ? (hasTreater ? "Processing" : "Completed") : "In-review";
+  let newSignStatus = unsigned === 0 ? (hasTreater ? "Processing" : "Completed") : "In-review";
+
+  let hasPendingPrereqs = false;
+  if (unsigned === 0) {
+    const prereqs = await prisma.submissionPrerequisite.findMany({ where: { mainSubmissionId: req.params.id } });
+    hasPendingPrereqs = prereqs.some(p => p.status !== "Approved" && p.status !== "Declined");
+    if (hasPendingPrereqs) {
+      newSignStatus = "Blocked - Awaiting Prerequisites";
+    }
+  }
 
   const updatedSubmission = await prisma.formSubmission.update({
     where: { id: req.params.id },
@@ -686,9 +942,8 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
   res.json({ success: true });
 
   // ── Background: generate + store the PDF once all signers are done ─────────
-  // Only if the form template has a PDF generator type configured (not "none")
   const pdfGeneratorType = currentForSign?.template?.pdfGeneratorType ?? "none";
-  if (unsigned === 0 && pdfGeneratorType !== "none") {
+  if (unsigned === 0) {
     if (currentForSign?.template?.needsContract && currentForSign.template.contractTemplateId && currentForSign.submittedBy?.finca_email) {
       await prisma.contractRequest.create({
         data: {
@@ -699,27 +954,31 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
       });
     }
 
-    checkAndUnblockPrerequisites(req.params.id);
-    // Queue PDF generation for the background worker
-    await prisma.pdfJobQueue.create({
-      data: {
-        sourceSubmissionId: req.params.id,
-        jobType: "MainForm",
-      },
-    });
-    console.info(`[pdf] Queued PDF generation for submission ${req.params.id}`);
-  } else if (unsigned === 0) {
-    // No PDF, but still need contract + prerequisite unblocking
-    if (currentForSign?.template?.needsContract && currentForSign.template.contractTemplateId && currentForSign.submittedBy?.finca_email) {
-      await prisma.contractRequest.create({
-        data: {
-          submissionId: req.params.id,
-          templateId: currentForSign.template.contractTemplateId,
-          submitterEmail: currentForSign.submittedBy.finca_email,
-        }
-      });
+    if (hasPendingPrereqs) {
+      // Initiate order-1 prerequisites now that signers are done
+      const prereqs = await prisma.submissionPrerequisite.findMany({ where: { mainSubmissionId: req.params.id } });
+      const prereqsToActivate = prereqs.filter(p => p.order === 1 && p.status === "Pending");
+      for (const p of prereqsToActivate) {
+        await activatePrerequisite(p.id, p.mainSubmissionId, p.targetFormId, p.targetEmail);
+      }
+    } else {
+      // No pending prerequisites, safe to queue PDF
+      if (pdfGeneratorType !== "none") {
+        const isPrereq = !!currentForSign?.prerequisiteFor;
+        await prisma.pdfJobQueue.create({
+          data: {
+            sourceSubmissionId: req.params.id,
+            jobType: isPrereq ? "Prerequisite" : "MainForm",
+            targetSubmissionId: isPrereq ? currentForSign!.prerequisiteFor!.mainSubmissionId : null,
+            targetFieldName: isPrereq ? `PrerequisitePDF:${currentForSign!.prerequisiteFor!.targetForm.name}` : null,
+          },
+        });
+        console.info(`[pdf] Queued PDF generation for submission ${req.params.id}`);
+      }
+      
+      // Important: check if THIS submission was a prerequisite for something else!
+      checkAndUnblockPrerequisites(req.params.id);
     }
-    checkAndUnblockPrerequisites(req.params.id);
   }
 });
 

@@ -120,7 +120,7 @@ router.get("/action-items", async (req: AuthRequest, res: Response) => {
       template: { formTreater: { equals: userBranch, mode: "insensitive" } },
     },
     include: {
-      template: { select: { name: true, formOwner: true, formTreater: true } },
+      template: { select: { name: true, formOwner: true, formTreater: true, fields: true } },
       signatories: { orderBy: { position: "asc" } },
       submittedBy: { select: { user_name: true, finca_email: true, branch: true } },
       documents: true,
@@ -251,6 +251,7 @@ router.get("/by-reference/:ref", async (req, res: Response) => {
       signatories: { orderBy: { position: "asc" } },
       template: true,
       submittedBy: { select: { user_name: true, finca_email: true, branch: true } },
+      documents: true,
     },
   });
   if (!submission) {
@@ -679,11 +680,22 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
   // Only if the form template has a PDF generator type configured (not "none")
   if (isFullySigned && submissionPdfType !== "none") {
     checkAndUnblockPrerequisites(submission.id);
+    
+    // Check if this submission is a prerequisite for another form
+    const prereqCheck = await prisma.submissionPrerequisite.findUnique({
+      where: { prereqSubmissionId: submission.id },
+      include: { targetForm: { select: { name: true } } }
+    });
+    
+    const isPrereq = !!prereqCheck;
+
     // Queue PDF generation for the background worker
     await prisma.pdfJobQueue.create({
       data: {
         sourceSubmissionId: submission.id,
-        jobType: "MainForm",
+        jobType: isPrereq ? "Prerequisite" : "MainForm",
+        targetSubmissionId: isPrereq ? prereqCheck!.mainSubmissionId : null,
+        targetFieldName: isPrereq ? `PrerequisitePDF:${prereqCheck!.targetForm.name}` : null,
       },
     });
     console.info(`[pdf] Queued PDF generation for submission ${submission.id}`);
@@ -721,8 +733,10 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
         return;
       }
 
-      // For each prerequisite field, create a draft submission + SubmissionPrerequisite record
+      // For each prerequisite field, create a SubmissionPrerequisite record
       let prereqCount = 0;
+      const isMainFormFullySignedAtStart = initialStatus === "Processing" || initialStatus === "Completed";
+
       for (const field of prereqFields) {
         const targetEmail = (formResponses[field.id] ?? formResponses[field.label] ?? "").trim();
         if (!targetEmail) continue;
@@ -733,100 +747,118 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
         });
         if (!targetTemplate) continue;
 
-        // Generate a reference for the draft prerequisite submission (removed -PRE)
-        const acronym = targetTemplate.name.split(" ").map((w: string) => w[0]).join("").toUpperCase();
-        const latestPrereq = await prisma.formSubmission.findFirst({
-          where: { templateId: targetTemplate.id },
-          orderBy: { createdAt: 'desc' },
-          select: { reference: true }
-        });
+        const order = field.prerequisiteOrder ? parseInt(field.prerequisiteOrder) : 1;
+        const isActiveNow = isMainFormFullySignedAtStart && order === 1;
 
-        let nextNumber = 1;
-        if (latestPrereq && latestPrereq.reference) {
-          const match = latestPrereq.reference.match(/\d+$/);
-          if (match) {
-            nextNumber = parseInt(match[0], 10) + 1;
-          } else {
-            const count = await prisma.formSubmission.count({ where: { templateId: targetTemplate.id } });
-            nextNumber = count + 1;
+        if (isActiveNow) {
+          // ACTIVE: Generate draft and send email immediately
+          const acronym = targetTemplate.name.split(" ").map((w: string) => w[0]).join("").toUpperCase();
+          const latestPrereq = await prisma.formSubmission.findFirst({
+            where: { templateId: targetTemplate.id },
+            orderBy: { createdAt: 'desc' },
+            select: { reference: true }
+          });
+
+          let nextNumber = 1;
+          if (latestPrereq && latestPrereq.reference) {
+            const match = latestPrereq.reference.match(/\d+$/);
+            if (match) {
+              nextNumber = parseInt(match[0], 10) + 1;
+            } else {
+              const count = await prisma.formSubmission.count({ where: { templateId: targetTemplate.id } });
+              nextNumber = count + 1;
+            }
           }
-        }
-        const prereqRef = `${acronym}${nextNumber}`;
+          const prereqRef = `${acronym}${nextNumber}`;
 
-        // Auto-populate form reference if a field exists
-        const targetFields: any[] = typeof targetTemplate.fields === "string"
-          ? JSON.parse(targetTemplate.fields)
-          : (targetTemplate.fields || []);
+          // Auto-populate form reference if a field exists
+          const targetFields: any[] = typeof targetTemplate.fields === "string"
+            ? JSON.parse(targetTemplate.fields)
+            : (targetTemplate.fields || []);
 
-        const prefilledResponses: Record<string, any> = {};
-        const refField = targetFields.find((f: any) =>
-          f.type !== "section_header" && f.type !== "instructions" && f.label.toLowerCase().includes("form reference")
-        );
-        if (refField) {
-          prefilledResponses[refField.id] = submission.reference;
-        }
+          const prefilledResponses: Record<string, any> = {};
+          const refField = targetFields.find((f: any) =>
+            f.type !== "section_header" && f.type !== "instructions" && f.label.toLowerCase().includes("form reference")
+          );
+          if (refField) {
+            prefilledResponses[refField.id] = submission.reference;
+          }
 
-        const prereqSub = await prisma.formSubmission.create({
-          data: {
-            formName: targetTemplate.name,
-            reference: prereqRef,
-            formResponses: prefilledResponses,
-            signingType: "sequential",
-            status: "Draft",
-            templateId: targetTemplate.id,
-            submittedById: null,
-          },
-        });
+          const prereqSub = await prisma.formSubmission.create({
+            data: {
+              formName: targetTemplate.name,
+              reference: prereqRef,
+              formResponses: prefilledResponses,
+              signingType: "sequential",
+              status: "Draft",
+              templateId: targetTemplate.id,
+              submittedById: null,
+            },
+          });
 
-        await prisma.submissionPrerequisite.create({
-          data: {
-            mainSubmissionId: submission.id,
-            prereqSubmissionId: prereqSub.id,
-            targetFormId: targetTemplate.id,
-            targetEmail,
-            status: "Pending",
-          },
-        });
-        prereqCount++;
+          await prisma.submissionPrerequisite.create({
+            data: {
+              mainSubmissionId: submission.id,
+              prereqSubmissionId: prereqSub.id,
+              targetFormId: targetTemplate.id,
+              targetEmail,
+              status: "Active",
+              order,
+            },
+          });
+          prereqCount++;
 
-        // Notify the target email
-        const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
-        const fillUrl = `${appUrl}/dashboard/forms/draft/${prereqSub.id}`;
-        mailer.sendMail({
-          from: `FINCALite <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
-          to: targetEmail,
-          subject: `Action Required: Please complete the "${targetTemplate.name}" form`,
-          html: `
-            <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
-              <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
-              <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
-              <hr style="border-color: #e5e7eb; margin: 20px 0;" />
-              <p style="font-size: 15px; color: #111827;">Hello,</p>
-              <p style="font-size: 14px; color: #374151;">
-                You have been requested to complete a prerequisite form before a submission can proceed for approval.
-              </p>
-              <div style="background: #f9fafb; border-left: 4px solid #B50938; border-radius: 4px; padding: 16px; margin: 16px 0;">
-                <p style="margin: 0; font-weight: 600; color: #111827;">${targetTemplate.name}</p>
-                <p style="margin: 4px 0 0; font-size: 13px; color: #6b7280;">Reference: ${prereqRef}</p>
+          // Notify the target email
+          const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
+          const fillUrl = `${appUrl}/dashboard/forms/draft/${prereqSub.id}`;
+          mailer.sendMail({
+            from: `FINCALite <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
+            to: targetEmail,
+            subject: `Action Required: Please complete the "${targetTemplate.name}" form`,
+            html: `
+              <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
+                <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
+                <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
+                <hr style="border-color: #e5e7eb; margin: 20px 0;" />
+                <p style="font-size: 15px; color: #111827;">Hello,</p>
+                <p style="font-size: 14px; color: #374151;">
+                  You have been requested to complete a prerequisite form before a submission can proceed for approval.
+                </p>
+                <div style="background: #f9fafb; border-left: 4px solid #B50938; border-radius: 4px; padding: 16px; margin: 16px 0;">
+                  <p style="margin: 0; font-weight: 600; color: #111827;">${targetTemplate.name}</p>
+                  <p style="margin: 4px 0 0; font-size: 13px; color: #6b7280;">Reference: ${prereqRef}</p>
+                </div>
+                <p style="font-size: 14px; color: #374151;">Please click the button below to open and complete your form. You may be asked to log in if you are a registered user.</p>
+                <a href="${fillUrl}" style="display: inline-block; background: #B50938; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; margin-top: 8px;">Open & Complete Form</a>
+                <p style="font-size: 12px; color: #9ca3af; margin-top: 24px;">If you believe this was sent in error, please contact your administrator.</p>
               </div>
-              <p style="font-size: 14px; color: #374151;">Please click the button below to open and complete your form. You may be asked to log in if you are a registered user.</p>
-              <a href="${fillUrl}" style="display: inline-block; background: #B50938; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; margin-top: 8px;">Open & Complete Form</a>
-              <p style="font-size: 12px; color: #9ca3af; margin-top: 24px;">If you believe this was sent in error, please contact your administrator.</p>
-            </div>
-          `,
-        }).catch((e: any) => console.error("[prereq email]", e));
+            `,
+          }).catch((e: any) => console.error("[prereq email]", e));
+
+        } else {
+          // PENDING: Queue for later, do not create draft or send email yet
+          await prisma.submissionPrerequisite.create({
+            data: {
+              mainSubmissionId: submission.id,
+              targetFormId: targetTemplate.id,
+              targetEmail,
+              status: "Pending",
+              order,
+            },
+          });
+          prereqCount++;
+        }
       }
 
-      // Block the main submission if any prerequisites were created
-      if (prereqCount > 0) {
+      // Block the main submission ONLY if it was about to go to Processing/Completed (fully signed)
+      notifySubmitterOfSubmission(submission.id);
+
+      if (prereqCount > 0 && isMainFormFullySignedAtStart) {
         await prisma.formSubmission.update({
           where: { id: submission.id },
           data: { status: "Blocked - Awaiting Prerequisites" },
         });
       } else {
-        // Send submission confirmation to submitter
-        notifySubmitterOfSubmission(submission.id);
-
         if (initialStatus === "Submitted") {
           notifyActiveSignatories(submission.id);
         } else if (initialStatus === "Completed") {

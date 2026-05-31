@@ -153,7 +153,10 @@ model SubmissionPrerequisite {
   
   targetEmail        String // Email of the person required to fill it
   
-  status             String @default("Pending") // Pending, Submitted, Approved
+  order              Int     @default(1) // Determines execution sequence
+  declineReason      String? @db.Text    // Captures why they refused it
+
+  status             String @default("Pending") // Pending, Active, Submitted, Approved, Declined
   
   @@unique([mainSubmissionId, targetFormId, targetEmail])
 }

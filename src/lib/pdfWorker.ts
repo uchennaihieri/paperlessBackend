@@ -44,8 +44,8 @@ async function processJob(job: {
   let folderFormName = submission.formName;
   let folderReference = submission.reference || submission.id.slice(-6);
 
-  // If this is an internal form, we want to save it in the PARENT form's folder
-  if (job.jobType === "InternalForm" && job.targetSubmissionId) {
+  // If this is an internal form or prerequisite, we want to save it in the PARENT form's folder
+  if ((job.jobType === "InternalForm" || job.jobType === "Prerequisite") && job.targetSubmissionId) {
     const parentSubmission = await prisma.formSubmission.findUnique({
       where: { id: job.targetSubmissionId },
       select: { formName: true, reference: true, id: true }
@@ -78,14 +78,11 @@ async function processJob(job: {
   }
 
   // Determine which submission to attach the PDF record and formResponses link to.
-  // For "InternalForm" jobs the PDF is attached to the *target* (parent) submission.
-  const attachToId =
-    job.jobType === "InternalForm" && job.targetSubmissionId
-      ? job.targetSubmissionId
-      : job.sourceSubmissionId;
+  // For "InternalForm" and "Prerequisite" jobs the PDF is attached to the *target* (parent) submission.
+  const isTargetJob = (job.jobType === "InternalForm" || job.jobType === "Prerequisite") && job.targetSubmissionId;
+  const attachToId = isTargetJob ? job.targetSubmissionId! : job.sourceSubmissionId;
 
-  const fieldName =
-    job.jobType === "InternalForm" && job.targetFieldName
+  const fieldName = (isTargetJob && job.targetFieldName)
       ? job.targetFieldName
       : "CompletedFormPDF";
 
@@ -110,7 +107,10 @@ async function processJob(job: {
 
   const resData = (latestSubmission?.formResponses as Record<string, any>) || {};
   
-  if (job.jobType === "InternalForm") {
+  if (job.jobType === "Prerequisite") {
+    // Prerequisite PDFs are tracked purely as SubmissionDocuments
+    // No need to inject them into formResponses
+  } else if (job.jobType === "InternalForm") {
     const currentArr = Array.isArray(resData[fieldName]) ? resData[fieldName] : [];
     const pendingIndex = currentArr.findIndex((a: any) => a.url === "__generating_pdf__");
     const newAttachment = { isAttachment: true, name: pdfResult.filename, url: `/api/v1/file?docId=${created.id}` };
@@ -121,16 +121,21 @@ async function processJob(job: {
       currentArr.push(newAttachment);
     }
     resData[fieldName] = currentArr;
+
+    await prisma.formSubmission.update({
+      where: { id: attachToId },
+      data: { formResponses: resData },
+    });
   } else {
     resData[fieldName] = [
       { isAttachment: true, name: pdfResult.filename, url: `/api/v1/file?docId=${created.id}` },
     ];
-  }
 
-  await prisma.formSubmission.update({
-    where: { id: attachToId },
-    data: { formResponses: resData },
-  });
+    await prisma.formSubmission.update({
+      where: { id: attachToId },
+      data: { formResponses: resData },
+    });
+  }
 
   // Mark job as completed
   await prisma.pdfJobQueue.update({
