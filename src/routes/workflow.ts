@@ -143,20 +143,31 @@ export async function activatePrerequisite(prereqId: string, mainSubmissionId: s
 }
 
 // ── Prerequisite Unblock Helper ──────────────────────────────────────────────
-export async function checkAndUnblockPrerequisites(prereqSubmissionId: string) {
+export async function checkAndUnblockPrerequisites(completedSubmissionId?: string, prerequisiteId?: string) {
   setImmediate(async () => {
     try {
-      const prereqLink = await prisma.submissionPrerequisite.findUnique({
-        where: { prereqSubmissionId },
-        select: { id: true, mainSubmissionId: true },
-      });
+      let prereqLink;
+      
+      if (prerequisiteId) {
+        prereqLink = await prisma.submissionPrerequisite.findUnique({
+          where: { id: prerequisiteId },
+          select: { id: true, mainSubmissionId: true },
+        });
+      } else if (completedSubmissionId) {
+        prereqLink = await prisma.submissionPrerequisite.findUnique({
+          where: { prereqSubmissionId: completedSubmissionId },
+          select: { id: true, mainSubmissionId: true },
+        });
+        if (prereqLink) {
+          // Mark this form prerequisite as Approved
+          await prisma.submissionPrerequisite.update({
+            where: { id: prereqLink.id },
+            data: { status: "Approved" },
+          });
+        }
+      }
+      
       if (!prereqLink) return;
-
-      // Mark this prerequisite as Approved
-      await prisma.submissionPrerequisite.update({
-        where: { id: prereqLink.id },
-        data: { status: "Approved" },
-      });
 
       // Get all prerequisites for the main submission
       const allPrereqs = await prisma.submissionPrerequisite.findMany({
@@ -218,7 +229,7 @@ export async function checkAndUnblockPrerequisites(prereqSubmissionId: string) {
               sourceSubmissionId: mainSub.id,
               jobType: isPrereq ? "Prerequisite" : "MainForm",
               targetSubmissionId: isPrereq ? mainSub.prerequisiteFor!.mainSubmissionId : null,
-              targetFieldName: isPrereq ? `PrerequisitePDF:${mainSub.prerequisiteFor!.targetForm.name}` : null,
+              targetFieldName: isPrereq ? `PrerequisitePDF:${mainSub.prerequisiteFor!.targetForm?.name ?? "Prerequisite"}` : null,
             },
           });
           console.info(`[pdf] Queued PDF generation for unblocked submission ${mainSub.id}`);
@@ -231,7 +242,11 @@ export async function checkAndUnblockPrerequisites(prereqSubmissionId: string) {
         const prereqsToActivate = allPrereqs.filter(p => p.order === nextPendingOrder && p.status === "Pending");
         
         for (const prereq of prereqsToActivate) {
-          await activatePrerequisite(prereq.id, prereq.mainSubmissionId, prereq.targetFormId, prereq.targetEmail);
+          if (prereq.type === "CONTRACT") {
+            await prisma.submissionPrerequisite.update({ where: { id: prereq.id }, data: { status: "Active" } });
+          } else if (prereq.targetFormId && prereq.targetEmail) {
+            await activatePrerequisite(prereq.id, prereq.mainSubmissionId, prereq.targetFormId, prereq.targetEmail);
+          }
         }
       }
     } catch (err) {
@@ -321,9 +336,25 @@ router.get("/queue", async (req: AuthRequest, res: Response) => {
   });
 
   const prereqMappedItems = prerequisiteItems
-    .filter(p => p.prereqSubmission !== null)
+    .filter(p => p.prereqSubmission !== null || p.type === "CONTRACT")
     .map(p => {
-      // Map to look like a FormSubmission but with extra context
+      if (p.type === "CONTRACT") {
+        return {
+          id: p.id,
+          type: "CONTRACT",
+          contractRequestId: p.contractRequestId,
+          reference: "CONTRACT-" + (p.mainSubmission.reference || "REQ"),
+          formName: "Sign Contract: " + p.mainSubmission.formName,
+          status: p.status,
+          createdAt: p.mainSubmission.createdAt, // fallback date
+          isPrerequisiteTask: true,
+          prerequisiteContext: {
+            mainSubmissionReference: p.mainSubmission.reference,
+            mainSubmissionName: p.mainSubmission.formName,
+            submittedBy: p.mainSubmission.submittedBy,
+          }
+        };
+      }
       return {
         ...p.prereqSubmission,
         isPrerequisiteTask: true,
@@ -943,23 +974,20 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
 
   // ── Background: generate + store the PDF once all signers are done ─────────
   const pdfGeneratorType = currentForSign?.template?.pdfGeneratorType ?? "none";
-  if (unsigned === 0) {
-    if (currentForSign?.template?.needsContract && currentForSign.template.contractTemplateId && currentForSign.submittedBy?.finca_email) {
-      await prisma.contractRequest.create({
-        data: {
-          submissionId: req.params.id,
-          templateId: currentForSign.template.contractTemplateId,
-          submitterEmail: currentForSign.submittedBy.finca_email,
-        }
-      });
-    }
-
-    if (hasPendingPrereqs) {
+  if (unsigned === 0) {    if (hasPendingPrereqs) {
       // Initiate order-1 prerequisites now that signers are done
       const prereqs = await prisma.submissionPrerequisite.findMany({ where: { mainSubmissionId: req.params.id } });
       const prereqsToActivate = prereqs.filter(p => p.order === 1 && p.status === "Pending");
       for (const p of prereqsToActivate) {
-        await activatePrerequisite(p.id, p.mainSubmissionId, p.targetFormId, p.targetEmail);
+        if (p.type === "CONTRACT") {
+          await prisma.submissionPrerequisite.update({
+            where: { id: p.id },
+            data: { status: "Active" }
+          });
+          // Could notify internal officer here
+        } else if (p.targetFormId && p.targetEmail) {
+          await activatePrerequisite(p.id, p.mainSubmissionId, p.targetFormId, p.targetEmail);
+        }
       }
     } else {
       // No pending prerequisites, safe to queue PDF
@@ -970,7 +998,7 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
             sourceSubmissionId: req.params.id,
             jobType: isPrereq ? "Prerequisite" : "MainForm",
             targetSubmissionId: isPrereq ? currentForSign!.prerequisiteFor!.mainSubmissionId : null,
-            targetFieldName: isPrereq ? `PrerequisitePDF:${currentForSign!.prerequisiteFor!.targetForm.name}` : null,
+            targetFieldName: isPrereq ? `PrerequisitePDF:${currentForSign!.prerequisiteFor!.targetForm?.name ?? "Prerequisite"}` : null,
           },
         });
         console.info(`[pdf] Queued PDF generation for submission ${req.params.id}`);

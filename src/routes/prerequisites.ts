@@ -75,13 +75,20 @@ router.post("/:id/remind", async (req: AuthRequest, res: Response) => {
   }
 
   try {
+    const targetEmail = prereq.targetEmail;
+    const targetFormName = prereq.targetForm?.name ?? "Form";
+    if (!targetEmail) {
+      res.status(400).json({ success: false, error: "No target email specified." });
+      return;
+    }
+
     const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
     const fillUrl = `${appUrl}/dashboard/forms/draft/${prereq.prereqSubmission.id}`;
 
     await mailer.sendMail({
       from: `FINCALite <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
-      to: prereq.targetEmail,
-      subject: `Reminder: Please complete the "${prereq.targetForm.name}" form`,
+      to: targetEmail,
+      subject: `Reminder: Please complete the "${targetFormName}" form`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
           <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
@@ -92,7 +99,7 @@ router.post("/:id/remind", async (req: AuthRequest, res: Response) => {
             This is a reminder that you have been requested to complete a prerequisite form before a submission can proceed for approval.
           </p>
           <div style="background: #f9fafb; border-left: 4px solid #B50938; border-radius: 4px; padding: 16px; margin: 16px 0;">
-            <p style="margin: 0; font-weight: 600; color: #111827;">${prereq.targetForm.name}</p>
+            <p style="margin: 0; font-weight: 600; color: #111827;">${targetFormName}</p>
             <p style="margin: 4px 0 0; font-size: 13px; color: #6b7280;">Reference: ${prereq.prereqSubmission.reference}</p>
           </div>
           <p style="font-size: 14px; color: #374151;">Please click the button below to open and complete your form. You may be asked to log in if you are a registered user.</p>
@@ -190,8 +197,8 @@ router.post("/:id/decline", async (req: AuthRequest, res: Response) => {
                   Your submission <strong>${prereq.mainSubmission.reference || prereq.mainSubmission.formName}</strong> was rejected because a required prerequisite form was declined.
                 </p>
                 <div style="background: #fef2f2; border-left: 4px solid #ef4444; border-radius: 4px; padding: 16px; margin: 16px 0;">
-                  <p style="margin: 0; font-weight: 600; color: #991b1b;">Prerequisite Declined: ${prereq.targetForm.name}</p>
-                  <p style="margin: 4px 0 0; font-size: 13px; color: #b91c1c;">Declined by: ${email || prereq.targetEmail}</p>
+                  <p style="margin: 0; font-weight: 600; color: #991b1b;">Prerequisite Declined: ${prereq.targetForm?.name ?? (prereq.type === "CONTRACT" ? "Contract" : "Prerequisite")}</p>
+                  <p style="margin: 4px 0 0; font-size: 13px; color: #b91c1c;">Declined by: ${email || prereq.targetEmail || "Unknown"}</p>
                   <p style="margin: 8px 0 0; font-size: 14px; color: #7f1d1d;"><strong>Reason:</strong> ${reason}</p>
                 </div>
                 <a href="${subUrl}" style="display: inline-block; background: #111827; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; margin-top: 8px;">View Submission</a>

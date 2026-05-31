@@ -695,7 +695,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
         sourceSubmissionId: submission.id,
         jobType: isPrereq ? "Prerequisite" : "MainForm",
         targetSubmissionId: isPrereq ? prereqCheck!.mainSubmissionId : null,
-        targetFieldName: isPrereq ? `PrerequisitePDF:${prereqCheck!.targetForm.name}` : null,
+        targetFieldName: isPrereq ? `PrerequisitePDF:${prereqCheck!.targetForm?.name ?? "Prerequisite"}` : null,
       },
     });
     console.info(`[pdf] Queued PDF generation for submission ${submission.id}`);
@@ -713,7 +713,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
     try {
       const templateWithFields = await prisma.formTemplate.findUnique({
         where: { id: templateId },
-        select: { fields: true },
+        select: { fields: true, needsContract: true, contractTemplateId: true },
       });
       if (!templateWithFields) return;
 
@@ -721,7 +721,10 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
       const prereqFields = fields.filter(
         (f: any) => f.isPrerequisite === true && f.targetFormTemplateId
       );
-      if (prereqFields.length === 0) {
+      
+      const requiresContract = templateWithFields.needsContract && templateWithFields.contractTemplateId;
+
+      if (prereqFields.length === 0 && !requiresContract) {
         // Always send submission confirmation to submitter
         notifySubmitterOfSubmission(submission.id);
 
@@ -736,6 +739,36 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
       // For each prerequisite field, create a SubmissionPrerequisite record
       let prereqCount = 0;
       const isMainFormFullySignedAtStart = initialStatus === "Processing" || initialStatus === "Completed";
+      
+      // Determine max prerequisite order to ensure Contract is the last one
+      let maxPrereqOrder = 0;
+      for (const field of prereqFields) {
+        const order = field.prerequisiteOrder ? parseInt(field.prerequisiteOrder) : 1;
+        if (order > maxPrereqOrder) maxPrereqOrder = order;
+      }
+      const contractOrder = maxPrereqOrder + 1;
+
+      if (requiresContract) {
+        const contract = await prisma.contractRequest.create({
+          data: {
+            submissionId: submission.id,
+            templateId: templateWithFields.contractTemplateId as string,
+            submitterEmail: req.user?.email || "Unknown",
+          }
+        });
+        
+        await prisma.submissionPrerequisite.create({
+          data: {
+            mainSubmissionId: submission.id,
+            type: "CONTRACT",
+            contractRequestId: contract.id,
+            targetEmail: req.user?.email || "Unknown",
+            order: contractOrder, // Contract is always the last prerequisite
+            status: isMainFormFullySignedAtStart && contractOrder === 1 ? "Active" : "Pending",
+          }
+        });
+        prereqCount++;
+      }
 
       for (const field of prereqFields) {
         const targetEmail = (formResponses[field.id] ?? formResponses[field.label] ?? "").trim();

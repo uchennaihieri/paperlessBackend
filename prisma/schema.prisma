@@ -145,20 +145,26 @@ model SubmissionPrerequisite {
   mainSubmissionId   String
   mainSubmission     FormSubmission @relation("MainSubmission", fields: [mainSubmissionId], references: [id], onDelete: Cascade)
   
+  type               String @default("FORM") // "FORM", "CONTRACT", "CHECK"
+  
+  // For FORM
   prereqSubmissionId String? @unique // Populated when the prerequisite draft is created
   prereqSubmission   FormSubmission? @relation("PrereqSubmission", fields: [prereqSubmissionId], references: [id], onDelete: SetNull)
   
-  targetFormId       String // The form template that must be filled
-  targetForm         FormTemplate @relation(fields: [targetFormId], references: [id])
+  targetFormId       String? // The form template that must be filled
+  targetForm         FormTemplate? @relation(fields: [targetFormId], references: [id])
   
-  targetEmail        String // Email of the person required to fill it
+  targetEmail        String? // Email of the person required to fill it
   
+  // For CONTRACT
+  contractRequestId  String?
+
   order              Int     @default(1) // Determines execution sequence
   declineReason      String? @db.Text    // Captures why they refused it
 
   status             String @default("Pending") // Pending, Active, Submitted, Approved, Declined
   
-  @@unique([mainSubmissionId, targetFormId, targetEmail])
+  @@index([mainSubmissionId])
 }
 
 model VerificationToken {
@@ -382,6 +388,12 @@ model ContractRequest {
   signatureToken String?
   pdfPath        String?  // SharePoint path of the finalized, signed contract
   createdAt      DateTime @default(now())
+  
+  externalSignerName  String?
+  externalSignerEmail String?
+  externalToken       String?  @unique
+  externalSignedAt    DateTime?
+  externalSignature   String?  @db.Text
   
   @@map("contract_requests")
 }

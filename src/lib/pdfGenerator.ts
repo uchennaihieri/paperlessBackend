@@ -28,12 +28,16 @@ function resolveContextPath(path: string, ctx: Record<string, any>): any {
 async function buildUnifiedContext(submission: any, pdfDataMapping: Record<string, any>) {
   const raw = submission.formResponses as Record<string, any>;
 
-  // Build Questions array — skip file attachments
+  // Build Questions array — handle file attachments gracefully
   const Questions: { index: number; label: string; value: string }[] = [];
   let qi = 1;
   for (const [label, val] of Object.entries(raw)) {
-    if (Array.isArray(val) && val[0]?.isAttachment) continue;
-    const displayVal = Array.isArray(val) ? val.join(", ") : String(val ?? "");
+    let displayVal = "";
+    if (Array.isArray(val) && val[0]?.isAttachment) {
+      displayVal = val.map((v: any) => v.name).join(", ");
+    } else {
+      displayVal = Array.isArray(val) ? val.join(", ") : String(val ?? "");
+    }
     Questions.push({ index: qi++, label, value: displayVal });
   }
 
@@ -236,6 +240,9 @@ export async function generateSubmissionPdf(id: string): Promise<{ buffer: Buffe
 
       if (responses[key] !== undefined) {
         const val = responses[key];
+        if (Array.isArray(val) && val[0]?.isAttachment) {
+          return val.map((v: any) => v.name).join(", ");
+        }
         return Array.isArray(val) ? val.join(", ") : String(val);
       }
       if (key === "FormName") return submission.formName;
@@ -247,7 +254,12 @@ export async function generateSubmissionPdf(id: string): Promise<{ buffer: Buffe
     const responses = submission.formResponses as Record<string, any>;
     let tableRows = "";
     Object.entries(responses).forEach(([key, val]) => {
-      const valStr = Array.isArray(val) ? val.join(", ") : String(val);
+      let valStr = "";
+      if (Array.isArray(val) && val[0]?.isAttachment) {
+        valStr = val.map((v: any) => v.name).join(", ");
+      } else {
+        valStr = Array.isArray(val) ? val.join(", ") : String(val);
+      }
       tableRows += `
         <tr>
           <td style="padding:10px;border-bottom:1px solid #eee;font-weight:bold;width:40%;vertical-align:top;">${key}</td>
