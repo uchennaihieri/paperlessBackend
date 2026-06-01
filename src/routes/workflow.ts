@@ -4,7 +4,7 @@ import prisma from "../lib/prisma";
 import { authenticate, AuthRequest } from "../middleware/authenticate";
 import { hashToken, decrypt } from "../lib/crypto";
 import { mailer } from "../lib/mailer";
-import { generateSubmissionPdf } from "../lib/pdfGenerator";
+import { generateSubmissionPdf, generateContractPdf } from "../lib/pdfGenerator";
 import { isSharePointEnabled, uploadToSharePoint } from "../lib/sharepoint";
 import fs from "fs/promises";
 import path from "path";
@@ -720,6 +720,22 @@ router.post("/:id/approve", async (req: AuthRequest, res: Response) => {
   }
 
   checkAndUnblockPrerequisites(req.params.id);
+
+  const contract = await prisma.contractRequest.findFirst({
+    where: { submissionId: req.params.id, status: { in: ["Signed", "Completed"] } }
+  });
+  if (contract) {
+    await prisma.pdfJobQueue.create({
+      data: {
+        sourceSubmissionId: req.params.id,
+        targetSubmissionId: contract.id, // We use target to pass contractId
+        jobType: "Contract",
+        targetFieldName: "SignedContract",
+        status: "Pending"
+      }
+    });
+    console.info(`[workflow] Enqueued Contract regeneration job for contract ${contract.id}`);
+  }
 
   res.json({ success: true });
 });

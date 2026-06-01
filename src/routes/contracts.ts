@@ -6,6 +6,7 @@ import { generateContractPdf, getContractPreviewHtml } from "../lib/pdfGenerator
 import { checkAndUnblockPrerequisites } from "./workflow";
 import { mailer } from "../lib/mailer";
 import crypto from "crypto";
+import { hashToken, decrypt } from "../lib/crypto";
 
 const router = Router();
 
@@ -243,9 +244,9 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
     return;
   }
 
-  const { drawnSignatureBase64, selfieBase64 } = req.body;
-  if (!drawnSignatureBase64 || !selfieBase64) {
-    res.status(400).json({ success: false, error: "Signature and selfie are required." });
+  const { token } = req.body;
+  if (!token) {
+    res.status(400).json({ success: false, error: "Security token is required." });
     return;
   }
 
@@ -269,8 +270,32 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    // Generate Contract PDF with new base64 parameters
-    const pdfResult = await generateContractPdf(contract.id, drawnSignatureBase64, selfieBase64);
+    const user = await prisma.user.findFirst({
+      where: { finca_email: email }
+    });
+
+    if (!user) {
+      res.status(400).json({ success: false, error: "User not found." });
+      return;
+    }
+
+    const secData = await prisma.securityData.findFirst({ where: { userEmail: { equals: email, mode: "insensitive" } } });
+    const hashedInput = hashToken(token);
+
+    if (!secData || secData.hashedToken !== hashedInput) {
+      res.status(400).json({ success: false, error: "Invalid security token." });
+      return;
+    }
+
+    if (!secData.encryptedSignature) {
+      res.status(400).json({ success: false, error: "You must set up your signature in settings first." });
+      return;
+    }
+
+    const signatureBase64 = decrypt(secData.encryptedSignature);
+
+    // Generate Contract PDF with user's saved signature (no selfie needed for internal token auth)
+    const pdfResult = await generateContractPdf(contract.id, signatureBase64, "", user.user_role || "");
     if (!pdfResult) {
       res.status(500).json({ success: false, error: "Failed to generate contract PDF." });
       return;
@@ -307,7 +332,9 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
       data: {
         status: "Signed",
         signedAt: new Date(),
-        signatureToken: "3_STEP_WIZARD", // Placeholder to indicate token was replaced by 3-step wizard
+        signatureToken: token, // Real token
+        internalSignature: signatureBase64,
+        internalSignerJobTitle: user.user_role || "",
         pdfPath: storedPath,
       },
     });

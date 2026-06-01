@@ -15,6 +15,8 @@ const DATA_DICTIONARY = [
   // Metadata / flat aliases (used in most templates)
   { category: "Metadata",    path: "formName",                        label: "Form Name" },
   { category: "Metadata",    path: "formDate",                        label: "Form Date (DD/MM/YYYY)" },
+  { category: "Metadata",    path: "DateNow",                         label: "Current Date (Now)" },
+  { category: "Metadata",    path: "TimeNow",                         label: "Current Time (Now)" },
   { category: "Metadata",    path: "dateSubmitted",                   label: "Date Submitted" },
   { category: "Metadata",    path: "reference",                       label: "Reference Code" },
   // Submitter
@@ -73,14 +75,63 @@ router.get("/data-dictionary", async (req: Request, res: Response) => {
       });
 
       for (const ft of formTemplates) {
+        if (ft.needsContract || ft.contractTemplateId) {
+          const catName = `Contract Prerequisite: ${ft.name}`;
+          dynamicDict.push({ category: catName, path: "Contract.status", label: "Contract Status" });
+          dynamicDict.push({ category: catName, path: "Contract.internalSignerJobTitle", label: "Internal Signer Job Title" });
+          dynamicDict.push({ category: catName, path: "Contract.internalSignatureImage", label: "Internal Signer Signature" });
+          dynamicDict.push({ category: catName, path: "Contract.externalSignerName", label: "External Signer Name" });
+          dynamicDict.push({ category: catName, path: "Contract.externalSignerEmail", label: "External Signer Email" });
+          dynamicDict.push({ category: catName, path: "Contract.externalSignedDate", label: "External Signed Date" });
+          dynamicDict.push({ category: catName, path: "Contract.externalSignatureImage", label: "External Signer Signature" });
+        }
+        
+        const faCatName = `Final Approver Data: ${ft.name}`;
+        dynamicDict.push({ category: faCatName, path: "FinalApprover.name", label: "Final Approver Name" });
+        dynamicDict.push({ category: faCatName, path: "FinalApprover.email", label: "Final Approver Email" });
+        dynamicDict.push({ category: faCatName, path: "FinalApprover.jobTitle", label: "Final Approver Job Title" });
+        dynamicDict.push({ category: faCatName, path: "FinalApprover.signatureImage", label: "Final Approver Signature" });
+
         const fields = (ft.fields as any[]) || [];
         for (const f of fields) {
           if (f.label) {
+            // Keep the raw unbracketed version for backwards compatibility, but also add bracketed if it has spaces
+            const path = f.label.includes(" ") ? `Responses.[${f.label}]` : `Responses.${f.label}`;
             dynamicDict.push({
               category: `Form Input: ${ft.name}`,
-              path: `Responses.${f.label}`,
+              path,
               label: f.label
             });
+          }
+          if (f.isPrerequisite && f.targetFormTemplateId) {
+            try {
+              const targetForm = await prisma.formTemplate.findUnique({ where: { id: f.targetFormTemplateId } });
+              if (targetForm) {
+                const targetFields = (targetForm.fields as any[]) || [];
+                const catName = `Prerequisite: ${targetForm.name}`;
+                const prereqBase = `Prerequisites.[${targetForm.name}]`;
+                
+                // Common Prerequisite Metadata & Signatories
+                dynamicDict.push({ category: catName, path: `${prereqBase}.Metadata.dateSubmitted`, label: "Date Submitted" });
+                dynamicDict.push({ category: catName, path: `${prereqBase}.Signatories.0.name`, label: "Signatory 1 Name" });
+                dynamicDict.push({ category: catName, path: `${prereqBase}.Signatories.0.email`, label: "Signatory 1 Email" });
+                dynamicDict.push({ category: catName, path: `${prereqBase}.Signatories.0.dateSigned`, label: "Signatory 1 Date Signed" });
+
+                // Prerequisite Input Fields
+                for (const tf of targetFields) {
+                  if (tf.label) {
+                    const safeLabel = tf.label.includes(" ") ? `[${tf.label}]` : tf.label;
+                    dynamicDict.push({
+                      category: catName,
+                      path: `${prereqBase}.Responses.${safeLabel}`,
+                      label: tf.label
+                    });
+                  }
+                }
+              }
+            } catch (err) {
+              console.error("Error fetching prerequisite fields:", err);
+            }
           }
         }
       }

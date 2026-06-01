@@ -1,5 +1,5 @@
 import prisma from "./prisma";
-import { generateSubmissionPdf } from "./pdfGenerator";
+import { generateSubmissionPdf, generateContractPdf } from "./pdfGenerator";
 import { isSharePointEnabled, uploadToSharePoint } from "./sharepoint";
 import fs from "fs/promises";
 import path from "path";
@@ -31,11 +31,17 @@ async function processJob(job: {
     return;
   }
 
-  const pdfResult = await generateSubmissionPdf(job.sourceSubmissionId);
+  let pdfResult;
+  if (job.jobType === "Contract" && job.targetSubmissionId) {
+    pdfResult = await generateContractPdf(job.targetSubmissionId);
+  } else {
+    pdfResult = await generateSubmissionPdf(job.sourceSubmissionId);
+  }
+
   if (!pdfResult) {
     await prisma.pdfJobQueue.update({
       where: { id: job.id },
-      data: { status: "Failed", errorMsg: "generateSubmissionPdf returned null" },
+      data: { status: "Failed", errorMsg: "PDF Generator returned null" },
     });
     return;
   }
@@ -59,14 +65,16 @@ async function processJob(job: {
   const formFolder = folderFormName.replace(/[\\/:*?"<>|]/g, "").trim().toUpperCase();
   const refFolder = folderReference.replace(/[\\/:*?"<>|]/g, "").trim().toUpperCase();
 
-  const folder = process.env.SHAREPOINT_UPLOAD_FOLDER 
+  const folderPath = process.env.SHAREPOINT_UPLOAD_FOLDER 
     ? `${process.env.SHAREPOINT_UPLOAD_FOLDER}/${formFolder}/${refFolder}`
     : `${formFolder}/${refFolder}`;
+  const finalFolder = job.jobType === "Contract" ? `${folderPath}/Contracts` : folderPath;
+
   const storedPath = await uploadToSharePoint(
     pdfResult.buffer,
     pdfResult.filename,
     "application/pdf",
-    folder
+    finalFolder
   );
 
   if (!storedPath) {
@@ -107,8 +115,8 @@ async function processJob(job: {
 
   const resData = (latestSubmission?.formResponses as Record<string, any>) || {};
   
-  if (job.jobType === "Prerequisite") {
-    // Prerequisite PDFs are tracked purely as SubmissionDocuments
+  if (job.jobType === "Prerequisite" || job.jobType === "Contract") {
+    // Prerequisite and Contract PDFs are tracked purely as SubmissionDocuments
     // No need to inject them into formResponses
   } else if (job.jobType === "InternalForm") {
     const currentArr = Array.isArray(resData[fieldName]) ? resData[fieldName] : [];

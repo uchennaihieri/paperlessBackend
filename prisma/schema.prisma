@@ -386,6 +386,8 @@ model ContractRequest {
   status         String   @default("Pending") // Pending, Signed
   signedAt       DateTime?
   signatureToken String?
+  internalSignature String? @db.Text
+  internalSignerJobTitle String?
   pdfPath        String?  // SharePoint path of the finalized, signed contract
   createdAt      DateTime @default(now())
   

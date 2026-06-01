@@ -3,6 +3,7 @@ import Handlebars from "handlebars";
 import prisma from "./prisma";
 import { PDFDocument, rgb } from "pdf-lib";
 import { downloadFromSharePoint } from "./sharepoint";
+import { decrypt } from "./crypto";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // resolveContextPath
@@ -10,7 +11,29 @@ import { downloadFromSharePoint } from "./sharepoint";
 // Supports numeric index segments (e.g. "Signatories.0.name" → array[0].name).
 // ─────────────────────────────────────────────────────────────────────────────
 function resolveContextPath(path: string, ctx: Record<string, any>): any {
-  const segments = path.split(".");
+  const segments = [];
+  let currentSegment = "";
+  let insideBrackets = false;
+
+  for (let i = 0; i < path.length; i++) {
+    const char = path[i];
+    if (char === '[') {
+      insideBrackets = true;
+    } else if (char === ']') {
+      insideBrackets = false;
+    } else if (char === '.' && !insideBrackets) {
+      segments.push(currentSegment);
+      currentSegment = "";
+      continue;
+    }
+    if (char !== '[' && char !== ']') {
+      currentSegment += char;
+    }
+  }
+  if (currentSegment) {
+    segments.push(currentSegment);
+  }
+
   let cur: any = ctx;
   for (const seg of segments) {
     if (cur === null || cur === undefined) return "";
@@ -68,6 +91,86 @@ async function buildUnifiedContext(submission: any, pdfDataMapping: Record<strin
 
   const submitter = submission.submittedBy as any;
 
+  // Fetch approved prerequisites and their forms
+  const prereqs = await prisma.submissionPrerequisite.findMany({
+    where: { mainSubmissionId: submission.id, status: "Approved" },
+    include: {
+      targetForm: true,
+      prereqSubmission: {
+        include: { signatories: { orderBy: { position: "asc" } }, submittedBy: true }
+      }
+    }
+  });
+
+  const Prerequisites: Record<string, any> = {};
+  for (const pr of prereqs) {
+    if (pr.targetForm?.name && pr.prereqSubmission) {
+      const pSub = pr.prereqSubmission;
+      
+      const pSignatories = (pSub.signatories as any[]).map((s, i) => ({
+        index:          i + 1,
+        name:           s.userName,
+        email:          s.email,
+        jobTitle:       roleByEmail.get(s.email) ?? "",
+        status:         s.status,
+        dateSigned:     s.signedAt ? new Date(s.signedAt).toLocaleDateString("en-GB") : "",
+        timeSigned:     s.signedAt ? new Date(s.signedAt).toLocaleTimeString() : "",
+        dateTime:       s.signedAt ? new Date(s.signedAt).toLocaleString("en-GB") : "",
+        signatureImage: s.signatureData ?? "",
+        signatureUrl:   s.signatureData ?? "",
+      }));
+
+      Prerequisites[pr.targetForm.name] = {
+        Metadata: {
+          dateSubmitted: new Date(pSub.createdAt).toLocaleDateString("en-GB"),
+          dateTime:      new Date(pSub.createdAt).toLocaleString(),
+        },
+        Responses: (pSub.formResponses as Record<string, any>) || {},
+        Signatories: pSignatories
+      };
+    }
+  }
+
+  const DateNow = new Date().toLocaleDateString("en-GB");
+  const TimeNow = new Date().toLocaleTimeString();
+
+  // Fetch contract request if applicable
+  const contractReqs = await prisma.contractRequest.findMany({
+    where: { submissionId: submission.id }
+  });
+  let Contract: any = null;
+  if (contractReqs.length > 0) {
+    const cReq = contractReqs[0];
+    Contract = {
+      status: cReq.status,
+      internalSignerJobTitle: cReq.internalSignerJobTitle || "",
+      internalSignatureImage: cReq.internalSignature || "",
+      externalSignerName: cReq.externalSignerName || "",
+      externalSignerEmail: cReq.externalSignerEmail || "",
+      externalSignedDate: cReq.externalSignedAt ? new Date(cReq.externalSignedAt).toLocaleDateString("en-GB") : "",
+      externalSignatureImage: cReq.externalSignature || "",
+    };
+  }
+
+  // Fetch final approver data if available
+  let FinalApprover: any = null;
+  if (submission.approverEmail) {
+    const approverUser = await prisma.user.findFirst({
+      where: { finca_email: submission.approverEmail }
+    });
+    if (approverUser && approverUser.finca_email) {
+      const secData = await prisma.securityData.findFirst({ where: { userEmail: { equals: approverUser.finca_email, mode: "insensitive" } } });
+      const signatureBase64 = secData?.encryptedSignature ? decrypt(secData.encryptedSignature) : "";
+      
+      FinalApprover = {
+        name: approverUser.user_name || submission.approvedBy || "",
+        email: approverUser.finca_email || "",
+        jobTitle: approverUser.user_role || "",
+        signatureImage: signatureBase64,
+      };
+    }
+  }
+
   const unified: Record<string, any> = {
     // Structured sections (capital keys = new standard)
     Metadata: {
@@ -80,10 +183,17 @@ async function buildUnifiedContext(submission: any, pdfDataMapping: Record<strin
         email:  submitter?.finca_email ?? submitter?.email ?? "",
         branch: submitter?.branch ?? "",
       },
+      DateNow,
+      TimeNow,
     },
+    DateNow,
+    TimeNow,
     Questions,
     Responses: raw,
     Signatories,
+    Prerequisites,
+    Contract,
+    FinalApprover,
 
     // Legacy flat aliases — keep so older templates keep working
     formTitle:      submission.formName,
@@ -388,7 +498,7 @@ export async function getContractPreviewHtml(contractRequestId: string): Promise
   return compiled(unified);
 }
 
-export async function generateContractPdf(contractRequestId: string, drawnSignatureBase64: string, selfieBase64: string) {
+export async function generateContractPdf(contractRequestId: string, drawnSignatureBase64: string = "", selfieBase64: string = "", jobTitle?: string) {
   const contract = await prisma.contractRequest.findUnique({
     where: { id: contractRequestId },
     include: {
@@ -425,9 +535,24 @@ export async function generateContractPdf(contractRequestId: string, drawnSignat
     unified[field.name] = resolveContextPath(field.mappingPath, unified);
   }
 
-  unified.ContractSignature = drawnSignatureBase64;
+  const activeSignature = drawnSignatureBase64 || contract.externalSignature || contract.internalSignature || "";
+  const activeJobTitle = jobTitle || contract.internalSignerJobTitle || "";
+
+  unified.ContractSignature = activeSignature;
   unified.ContractSelfie = selfieBase64;
   unified.ContractDate = contract.signedAt ? new Date(contract.signedAt).toLocaleDateString("en-GB") : new Date().toLocaleDateString("en-GB");
+
+  // Inject real-time contract values before saving to DB, or fallback to existing DB values
+  unified.Contract = unified.Contract || {};
+  unified.Contract.status = contract.status === "Pending" ? "Signed" : contract.status;
+  
+  if (contract.externalToken && contract.externalSignerEmail) {
+    unified.Contract.externalSignatureImage = activeSignature;
+    unified.Contract.externalSignedDate = unified.ContractDate;
+  } else {
+    unified.Contract.internalSignatureImage = activeSignature;
+    if (activeJobTitle) unified.Contract.internalSignerJobTitle = activeJobTitle;
+  }
 
   const compiled = Handlebars.compile(htmlSource);
   const html = compiled(unified);
