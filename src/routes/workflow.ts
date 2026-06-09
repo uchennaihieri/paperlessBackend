@@ -603,7 +603,13 @@ router.post("/:id/complete", async (req: AuthRequest, res: Response) => {
   if (!approverEmail) {
     await prisma.formSubmission.update({
       where: { id: req.params.id },
-      data: { status: "Completed", approvedBy: "None", approverEmail: null },
+      data: { 
+        status: "Completed", 
+        approvedBy: "None", 
+        approverEmail: null,
+        treatedBy: treaterName,
+        treaterEmail: email
+      },
     });
     await logAudit({
       submissionId: req.params.id,
@@ -625,6 +631,8 @@ router.post("/:id/complete", async (req: AuthRequest, res: Response) => {
         status: "Awaiting Final Approval",
         approvedBy: approverName ?? approverEmail,
         approverEmail,
+        treatedBy: treaterName,
+        treaterEmail: email
       },
     });
     await logAudit({

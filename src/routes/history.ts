@@ -140,7 +140,21 @@ router.get("/", async (req: AuthRequest, res: Response) => {
     // 3. Submissions treated by the user (action center)
     includeTreated
       ? prisma.formSubmission.findMany({
-          where: { treaterEmail: { equals: email, mode: "insensitive" }, ...baseFilter },
+          where: { 
+            OR: [
+              { treaterEmail: { equals: email, mode: "insensitive" } },
+              {
+                treaterEmail: null,
+                auditTrail: {
+                  some: {
+                    actorEmail: { equals: email, mode: "insensitive" },
+                    action: { in: ["completed", "routed_for_approval", "assigned", "filed"] }
+                  }
+                }
+              }
+            ],
+            ...baseFilter 
+          },
           select: { id: true },
         }).then(rows => rows.map(r => r.id))
       : Promise.resolve([]),
@@ -150,7 +164,15 @@ router.get("/", async (req: AuthRequest, res: Response) => {
       ? prisma.formSubmission.findMany({
           where: { 
             template: { formTreater: { equals: userBranch, mode: "insensitive" } },
-            treaterEmail: { not: null },
+            OR: [
+              { treaterEmail: { not: null } },
+              {
+                treaterEmail: null,
+                auditTrail: {
+                  some: { action: { in: ["completed", "routed_for_approval", "assigned", "filed"] } }
+                }
+              }
+            ],
             ...baseFilter 
           },
           select: { id: true },
