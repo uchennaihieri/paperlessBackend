@@ -28,9 +28,10 @@ const router = Router();
 router.use(authenticate as any);
 
 router.get("/", async (req: AuthRequest, res: Response) => {
-  const email     = req.user?.email ?? null;
-  const userId    = req.user?.id   ?? null;
-  const userName  = req.user?.user_name ?? null;
+  const email      = req.user?.email ?? null;
+  const userId     = req.user?.id   ?? null;
+  const userName   = req.user?.user_name ?? null;
+  const userBranch = req.user?.branch ?? null;
 
   if (!email || !userId) {
     res.status(401).json({ success: false, error: "Not authenticated" });
@@ -109,13 +110,14 @@ router.get("/", async (req: AuthRequest, res: Response) => {
   const baseFilter = { ...statusFilter, ...dateCreatedFilter };
 
   // Decide which roles to look up (default: all)
-  const includeSubmitted = roles.length === 0 || roles.includes("submitted");
-  const includeSigned    = roles.length === 0 || roles.includes("signed");
-  const includeTreated   = roles.length === 0 || roles.includes("treated");
-  const includeApproved  = roles.length === 0 || roles.includes("approved");
-  const includeShared    = roles.length === 0 || roles.includes("shared");
+  const includeSubmitted     = roles.length === 0 || roles.includes("submitted");
+  const includeSigned        = roles.length === 0 || roles.includes("signed");
+  const includeTreated       = roles.length === 0 || roles.includes("treated");
+  const includeBranchTreated = roles.length === 0 || roles.includes("branch_treated");
+  const includeApproved      = roles.length === 0 || roles.includes("approved");
+  const includeShared        = roles.length === 0 || roles.includes("shared");
 
-  const [submittedIds, signatoryIds, treatedIds, approvedIds] = await Promise.all([
+  const [submittedIds, signatoryIds, treatedIds, branchTreatedIds, approvedIds] = await Promise.all([
     // 1. Submissions the user created
     includeSubmitted
       ? prisma.formSubmission.findMany({
@@ -136,14 +138,26 @@ router.get("/", async (req: AuthRequest, res: Response) => {
       : Promise.resolve([]),
 
     // 3. Submissions treated by the user (action center)
-    includeTreated && userName
+    includeTreated
       ? prisma.formSubmission.findMany({
-          where: { treatedBy: { contains: userName, mode: "insensitive" }, ...baseFilter },
+          where: { treaterEmail: { equals: email, mode: "insensitive" }, ...baseFilter },
           select: { id: true },
         }).then(rows => rows.map(r => r.id))
       : Promise.resolve([]),
 
-    // 4. Submissions where the user was the final approver and approved
+    // 4. Submissions treated by anyone in the user's branch
+    includeBranchTreated && userBranch
+      ? prisma.formSubmission.findMany({
+          where: { 
+            template: { formTreater: { equals: userBranch, mode: "insensitive" } },
+            treaterEmail: { not: null },
+            ...baseFilter 
+          },
+          select: { id: true },
+        }).then(rows => rows.map(r => r.id))
+      : Promise.resolve([]),
+
+    // 5. Submissions where the user was the final approver and approved
     includeApproved
       ? prisma.formSubmission.findMany({
           where: {
@@ -172,6 +186,7 @@ router.get("/", async (req: AuthRequest, res: Response) => {
     ...submittedIds,
     ...signatoryIds,
     ...treatedIds,
+    ...branchTreatedIds,
     ...approvedIds,
   ])];
 
@@ -249,11 +264,12 @@ router.get("/", async (req: AuthRequest, res: Response) => {
   ]);
 
   // ── Annotate each item with the user's role(s) ──────────────────────────────
-  const signatoryIdSet    = new Set(signatoryIds);
-  const submittedIdSet    = new Set(submittedIds);
-  const treatedIdSet      = new Set(treatedIds);
-  const approvedIdSet     = new Set(approvedIds);
-  const sharedIdSet       = new Set(sharedIds);
+  const signatoryIdSet     = new Set(signatoryIds);
+  const submittedIdSet     = new Set(submittedIds);
+  const treatedIdSet       = new Set(treatedIds);
+  const branchTreatedIdSet = new Set(branchTreatedIds);
+  const approvedIdSet      = new Set(approvedIds);
+  const sharedIdSet        = new Set(sharedIds);
 
   const data = rows.map((sub: any) => {
     const myRoles: string[] = [];
@@ -265,6 +281,7 @@ router.get("/", async (req: AuthRequest, res: Response) => {
       myRoles.push(sigRow?.status === "Declined" ? "declined" : "signed");
     }
     if (treatedIdSet.has(sub.id))  myRoles.push("treated");
+    if (branchTreatedIdSet.has(sub.id)) myRoles.push("branch_treated");
     if (approvedIdSet.has(sub.id)) myRoles.push("approved");
     if (sharedIdSet.has(sub.id) && myRoles.length === 0) myRoles.push("shared");
 
