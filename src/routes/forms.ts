@@ -233,7 +233,7 @@ router.get("/:id", async (req: AuthRequest, res: Response) => {
 
 // ── POST /api/v1/forms ─────────────────────────────────────────────────────────
 router.post("/", requireAdmin as any, async (req: AuthRequest, res: Response) => {
-  const { name, description, fields, formOwner, formTreater, htmlTemplate, pdfGeneratorType, generatesExcel, pdfTemplateId, mobileEnabled, accountServicesEnabled, isInternal, needsContract, contractTemplateId } = req.body;
+  const { name, description, fields, formOwner, formTreater, formTreaterRole, htmlTemplate, pdfGeneratorType, generatesExcel, pdfTemplateId, mobileEnabled, accountServicesEnabled, isInternal, needsContract, contractTemplateId, automatedSignatories, automatedSigningType } = req.body;
   try {
     const template = await prisma.formTemplate.create({
       data: {
@@ -245,12 +245,15 @@ router.post("/", requireAdmin as any, async (req: AuthRequest, res: Response) =>
         fields,
         formOwner: formOwner ?? null,
         formTreater: formTreater ?? null,
+        formTreaterRole: formTreaterRole ?? null,
         htmlTemplate: htmlTemplate ?? null,
         pdfGeneratorType: pdfGeneratorType ?? "none",
         generatesExcel: generatesExcel ?? false,
         pdfTemplateId: pdfTemplateId || null,
         needsContract: needsContract ?? false,
         contractTemplateId: contractTemplateId || null,
+        automatedSignatories: automatedSignatories || null,
+        automatedSigningType: automatedSigningType || null,
       },
     });
     res.status(201).json({ success: true, data: template });
@@ -266,7 +269,7 @@ router.post("/", requireAdmin as any, async (req: AuthRequest, res: Response) =>
 
 // ── PATCH /api/v1/forms/:id ───────────────────────────────────────────────────
 router.patch("/:id", requireAdmin as any, async (req: AuthRequest, res: Response) => {
-  const { name, description, fields, formOwner, formTreater, htmlTemplate, pdfGeneratorType, generatesExcel, pdfTemplateId, mobileEnabled, accountServicesEnabled, isInternal, needsContract, contractTemplateId } = req.body;
+  const { name, description, fields, formOwner, formTreater, formTreaterRole, htmlTemplate, pdfGeneratorType, generatesExcel, pdfTemplateId, mobileEnabled, accountServicesEnabled, isInternal, needsContract, contractTemplateId, automatedSignatories, automatedSigningType } = req.body;
   try {
     const template = await prisma.formTemplate.update({
       where: { id: req.params.id },
@@ -279,12 +282,15 @@ router.patch("/:id", requireAdmin as any, async (req: AuthRequest, res: Response
         fields,
         formOwner: formOwner ?? null,
         formTreater: formTreater ?? null,
+        formTreaterRole: formTreaterRole ?? null,
         htmlTemplate: htmlTemplate ?? null,
         pdfGeneratorType: pdfGeneratorType ?? "none",
         generatesExcel: generatesExcel ?? false,
         pdfTemplateId: pdfTemplateId || null,
         needsContract: needsContract ?? false,
         contractTemplateId: contractTemplateId || null,
+        automatedSignatories: automatedSignatories || null,
+        automatedSigningType: automatedSigningType || null,
       },
     });
     res.json({ success: true, data: template });

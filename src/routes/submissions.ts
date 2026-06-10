@@ -157,18 +157,54 @@ router.get("/filings", async (req: AuthRequest, res: Response) => {
     const submissions = await prisma.formSubmission.findMany({
       where: {
         status: "Completed",
-        template: {
-          formOwner: { equals: userBranch, mode: "insensitive" }
-        }
+        OR: [
+          { template: { formOwner: { equals: userBranch, mode: "insensitive" } } },
+          {
+            AND: [
+              {
+                OR: [
+                  { template: { formOwner: null } },
+                  { template: { formOwner: "" } }
+                ]
+              },
+              {
+                OR: [
+                  { formResponses: { path: ['Branch'], equals: userBranch } },
+                  { formResponses: { path: ['branch'], equals: userBranch } }
+                ]
+              }
+            ]
+          }
+        ]
       },
       orderBy: { createdAt: "desc" },
-      include: {
+      select: {
+        id: true,
+        formName: true,
+        reference: true,
+        alias: true,
+        status: true,
+        treatedBy: true,
+        createdAt: true,
+        updatedAt: true,
+        formResponses: true,
         template: { select: { name: true, formOwner: true } },
         submittedBy: { select: { user_name: true, finca_email: true, branch: true } },
       }
     });
 
-    res.json({ success: true, data: submissions });
+    // Only include formResponses for forms categorized as "general" or if they contain a branch field
+    // to save payload size
+    const filteredSubmissions = submissions.map((sub: any) => {
+      const isGeneral = sub.formName?.toLowerCase().includes("general");
+      const hasBranchField = sub.formResponses && Object.keys(sub.formResponses).some(k => k.toLowerCase() === 'branch');
+      if (!isGeneral && !hasBranchField) {
+        delete sub.formResponses;
+      }
+      return sub;
+    });
+
+    res.json({ success: true, data: filteredSubmissions });
   } catch (err: any) {
     console.error("Error fetching filings:", err);
     res.status(500).json({ success: false, error: err.message || "Failed to fetch filings" });
