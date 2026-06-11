@@ -137,6 +137,7 @@ model SubmissionSignatory {
   signedAt       DateTime?
   signatureToken String?
   signatureData  String?        @db.Text // Contains the base64 signature blob
+  annotations    Json?          // Stores free-form signature/text coordinates
   status         String         @default("Pending") // Pending, Signed, Declined
   declineReason  String?        @db.Text // Optional reason given when declining
 

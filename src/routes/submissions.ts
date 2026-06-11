@@ -337,7 +337,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
     return;
   }
 
-  const {
+  let {
     templateId,
     formName,
     formResponses = {},
@@ -350,6 +350,22 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
   if (!templateId || !formName) {
     res.status(400).json({ success: false, error: "templateId and formName are required." });
     return;
+  }
+
+  // ── Fetch Template and Check for Signable Document ─────────────────────────
+  const template = await prisma.formTemplate.findUnique({ where: { id: templateId } });
+  const templateFields: any[] = typeof template?.fields === "string"
+    ? JSON.parse(template.fields) : (template?.fields ?? []);
+  
+  let hasSignableDocument = false;
+  let signableDocumentFieldLabel = "";
+  for (const field of templateFields) {
+    if (field.type === "signable_document") {
+      hasSignableDocument = true;
+      signableDocumentFieldLabel = field.label;
+      signingType = "sequential"; // Force sequential signing for free-form PDF signing
+      break;
+    }
   }
 
   // ── Initiator signature token (optional) ───────────────────────────────────
@@ -429,10 +445,6 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
 
   // ── Resolve Extended Service Reference fields ──────────────────────────────
   try {
-    const template = await prisma.formTemplate.findUnique({ where: { id: templateId } });
-    const templateFields: any[] = typeof template?.fields === "string"
-      ? JSON.parse(template.fields) : (template?.fields ?? []);
-
     for (const field of templateFields) {
       if ((field as any).type !== "extended_service") continue;
       const service: string = (field as any).extendedService ?? "";
@@ -617,13 +629,8 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
   // ── Determine initial status ───────────────────────────────────────────────────────
   const isFullySigned = sigsInput.length === 1 && finalSignatureStatus === "Signed";
 
-  // Fetch the template to check formTreater and pdfGeneratorType
-  const templateForStatus = await prisma.formTemplate.findUnique({
-    where: { id: templateId },
-    select: { formTreater: true, pdfGeneratorType: true },
-  });
-  const hasTreater = !!(templateForStatus?.formTreater && templateForStatus.formTreater.toLowerCase() !== "none");
-  const submissionPdfType = templateForStatus?.pdfGeneratorType ?? "none";
+  const hasTreater = !!(template?.formTreater && template.formTreater.toLowerCase() !== "none");
+  const submissionPdfType = hasSignableDocument ? "none" : (template?.pdfGeneratorType ?? "none");
 
   const initialStatus = isFullySigned ? (hasTreater ? "Processing" : "Completed") : "Submitted";
 

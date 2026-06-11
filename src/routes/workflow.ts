@@ -5,9 +5,10 @@ import { authenticate, AuthRequest } from "../middleware/authenticate";
 import { hashToken, decrypt } from "../lib/crypto";
 import { mailer } from "../lib/mailer";
 import { generateSubmissionPdf, generateContractPdf } from "../lib/pdfGenerator";
-import { isSharePointEnabled, uploadToSharePoint } from "../lib/sharepoint";
+import { isSharePointEnabled, uploadToSharePoint, downloadFromSharePoint } from "../lib/sharepoint";
 import fs from "fs/promises";
 import path from "path";
+import { PDFDocument, rgb } from "pdf-lib";
 
 const router = Router();
 router.use(authenticate as any);
@@ -279,7 +280,8 @@ router.get("/queue", async (req: AuthRequest, res: Response) => {
             targetForm: { select: { name: true } },
             prereqSubmission: { select: { reference: true, status: true } },
           }
-        }
+        },
+        template: { select: { fields: true } }
       },
       orderBy: { createdAt: "desc" },
     }),
@@ -297,7 +299,8 @@ router.get("/queue", async (req: AuthRequest, res: Response) => {
             targetForm: { select: { name: true } },
             prereqSubmission: { select: { reference: true, status: true } },
           }
-        }
+        },
+        template: { select: { fields: true } }
       },
       orderBy: { createdAt: "desc" },
     }),
@@ -892,7 +895,7 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
   const email = req.user?.email ?? null;
   if (!email) { res.status(401).json({ success: false, error: "Not authenticated." }); return; }
 
-  const { signatureData, signatureToken } = req.body;
+  const { signatureData, signatureToken, annotations } = req.body;
   let finalSignatureData: string | null = signatureData ?? null;
 
   if (signatureToken) {
@@ -927,7 +930,11 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
 
   await prisma.submissionSignatory.update({
     where: { id: sigRow.id },
-    data: { status: "Signed", signedAt: new Date(), signatureData: finalSignatureData },
+    data: { 
+      status: "Signed", 
+      signedAt: new Date(), 
+      signatureData: finalSignatureData,
+    },
   });
 
   const unsigned = await prisma.submissionSignatory.count({
@@ -940,7 +947,7 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
       status: true,
       reference: true,
       signingType: true,
-      template: { select: { needsContract: true, contractTemplateId: true, formTreater: true, pdfGeneratorType: true } },
+      template: { select: { needsContract: true, contractTemplateId: true, formTreater: true, pdfGeneratorType: true, fields: true } },
       submittedBy: { select: { finca_email: true } },
       prerequisiteFor: {
         select: {
@@ -993,7 +1000,73 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
     notifyActiveSignatories(req.params.id);
   }
 
-  // ── Respond immediately — signer should never wait for PDF/SharePoint ─────
+  // ── Handle "Signable Document" (Master PDF) Burning ──────────────────────
+  let hasSignableDocument = false;
+  let signableFieldLabel = "";
+  if (currentForSign?.template?.fields) {
+    const fields = typeof currentForSign.template.fields === "string" 
+      ? JSON.parse(currentForSign.template.fields) : currentForSign.template.fields;
+    for (const f of fields) {
+      if (f.type === "signable_document") {
+        hasSignableDocument = true;
+        signableFieldLabel = f.label;
+        break;
+      }
+    }
+  }
+
+  if (hasSignableDocument && signableFieldLabel && Array.isArray(annotations) && annotations.length > 0) {
+    try {
+      const doc = await prisma.submissionDocument.findFirst({
+        where: { submissionId: req.params.id, fieldName: signableFieldLabel }
+      });
+      if (doc && doc.filePath) {
+        const { buffer } = await downloadFromSharePoint(doc.filePath);
+        const pdfDoc = await PDFDocument.load(buffer);
+        const pages = pdfDoc.getPages();
+
+        for (const ann of annotations) {
+          // annotations expected: { type: 'text'|'signature', page: 1, x: number, y: number, value: string }
+          // y is assumed to be top-left origin (CSS-like) in points.
+          const page = pages[ann.page - 1];
+          if (!page) continue;
+
+          const pdfHeight = page.getHeight();
+          
+          if (ann.type === "text" && ann.value) {
+            // Standard font size 12
+            page.drawText(ann.value, {
+              x: ann.x,
+              y: pdfHeight - ann.y - 12, // Convert top-left to bottom-left
+              size: 12,
+              color: rgb(0, 0, 0)
+            });
+          } else if (ann.type === "signature" && ann.value) {
+            const b64 = ann.value.replace(/^data:image\/(png|jpeg|jpg);base64,/, "");
+            const imgBytes = Buffer.from(b64, "base64");
+            const image = await pdfDoc.embedPng(imgBytes);
+            // Default sizing, scaled to fit a reasonable bounding box (e.g. 150px wide)
+            const dims = image.scaleToFit(150, 75);
+            page.drawImage(image, {
+              x: ann.x,
+              y: pdfHeight - ann.y - dims.height, // top-left to bottom-left
+              width: dims.width,
+              height: dims.height,
+            });
+          }
+        }
+
+        const pdfBytes = await pdfDoc.save();
+        // Overwrite the file in SharePoint by passing doc.filePath as the fileName and "" as folder
+        await uploadToSharePoint(Buffer.from(pdfBytes), doc.filePath, doc.mimeType, "");
+        console.info(`[pdf] Burned annotations into Master PDF ${doc.filePath}`);
+      }
+    } catch (e) {
+      console.error("[pdf] Failed to burn annotations into signable document:", e);
+    }
+  }
+
+  // ── Respond immediately — signer should never wait for standard generation ─────
   res.json({ success: true });
 
   // ── Background: generate + store the PDF once all signers are done ─────────
