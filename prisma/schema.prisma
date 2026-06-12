@@ -27,6 +27,7 @@ model User {
   passwordHash      String?   // bcrypt hash of the user's password
   mustResetPassword Boolean   @default(true)  // true on first login
   passwordChangedAt DateTime? // set on every password change; JWTs issued before this are rejected
+  resetAttempts     Int       @default(0)     // tracks failed password reset attempts
 
   // Access fields
   specialAccess    String?   @db.VarChar(100) // e.g. "None", "Administrator", "Accountant", or custom

@@ -89,7 +89,7 @@ router.get("/:submissionId", async (req, res: Response) => {
   });
 
   if (!submission) {
-    res.status(404).json({ success: false, error: "Submission not found" });
+    res.status(404).json({ success: false, error: "Submission not found", code: "SUBMISSION_NOT_FOUND" });
     return;
   }
 

@@ -427,7 +427,7 @@ router.get("/resolve-assignee", async (req: AuthRequest, res: Response) => {
     res.json({ success: true, data: users });
   } catch (err) {
     console.error("[resolve-assignee] Error:", err);
-    res.status(500).json({ success: false, error: "Database error." });
+    res.status(500).json({ success: false, error: "Database error.", code: "DATABASE_ERROR" });
   }
 });
 
@@ -450,7 +450,7 @@ router.get("/submissions/:id", async (req, res: Response) => {
       }
     },
   });
-  if (!sub) { res.status(404).json({ success: false, error: "Not found" }); return; }
+  if (!sub) { res.status(404).json({ success: false, error: "Not found", code: "NOT_FOUND" }); return; }
   res.json({ success: true, data: sub });
 });
 
@@ -472,14 +472,14 @@ router.post("/:id/assign-self", async (req: AuthRequest, res: Response) => {
   });
 
   if (!current) {
-    res.status(404).json({ success: false, error: "Submission not found." });
+    res.status(404).json({ success: false, error: "Submission not found.", code: "SUBMISSION_NOT_FOUND" });
     return;
   }
 
   if (current.template?.needsContract) {
     const hasSignedContract = current.contractRequests.some((c: any) => c.status === "Signed");
     if (!hasSignedContract) {
-      res.status(400).json({ success: false, error: "Awaiting signed contract from submitter." });
+      res.status(400).json({ success: false, error: "Awaiting signed contract from submitter.", code: "AWAITING_SIGNED_CONTRACT_FROM" });
       return;
     }
   }
@@ -508,7 +508,7 @@ router.post("/:id/assign-self", async (req: AuthRequest, res: Response) => {
 router.patch("/:id/revert-assignment", async (req: AuthRequest, res: Response) => {
   const email = req.user?.email ?? null;
   if (!email) {
-    res.status(401).json({ success: false, error: "Not authenticated." });
+    res.status(401).json({ success: false, error: "Not authenticated.", code: "NOT_AUTHENTICATED" });
     return;
   }
 
@@ -518,18 +518,18 @@ router.patch("/:id/revert-assignment", async (req: AuthRequest, res: Response) =
   });
 
   if (!current) {
-    res.status(404).json({ success: false, error: "Submission not found." });
+    res.status(404).json({ success: false, error: "Submission not found.", code: "SUBMISSION_NOT_FOUND" });
     return;
   }
 
   if (!current.status.startsWith("Assigned")) {
-    res.status(400).json({ success: false, error: "This submission is not currently assigned." });
+    res.status(400).json({ success: false, error: "This submission is not currently assigned.", code: "THIS_SUBMISSION_IS_NOT_CURRENT" });
     return;
   }
 
   // Only the person who assigned themselves can revert
   if (current.treaterEmail?.toLowerCase() !== email.toLowerCase()) {
-    res.status(403).json({ success: false, error: "Only the person who self-assigned can revert the assignment." });
+    res.status(403).json({ success: false, error: "Only the person who self-assigned can revert the assignment.", code: "ONLY_THE_PERSON_WHO_SELFASSIGN" });
     return;
   }
 
@@ -559,15 +559,15 @@ router.post("/:id/complete", async (req: AuthRequest, res: Response) => {
   const email = req.user?.email ?? null;
 
   // Always require the treater's token
-  if (!email) { res.status(401).json({ success: false, error: "Not authenticated." }); return; }
+  if (!email) { res.status(401).json({ success: false, error: "Not authenticated.", code: "NOT_AUTHENTICATED" }); return; }
   if (!signatureToken) {
-    res.status(400).json({ success: false, error: "Your signature token is required." });
+    res.status(400).json({ success: false, error: "Your signature token is required.", code: "YOUR_SIGNATURE_TOKEN_IS_REQUIR" });
     return;
   }
   const hashedInput = hashToken(signatureToken);
   const secData = await prisma.securityData.findFirst({ where: { userEmail: { equals: email!, mode: "insensitive" } } });
   if (!secData || secData.hashedToken !== hashedInput) {
-    res.status(400).json({ success: false, error: "Invalid signature token. Please check and try again." });
+    res.status(400).json({ success: false, error: "Invalid signature token. Please check and try again.", code: "INVALID_SIGNATURE_TOKEN_PLEASE" });
     return;
   }
 
@@ -658,11 +658,11 @@ router.post("/:id/complete", async (req: AuthRequest, res: Response) => {
 // Final approver signs off with their token and marks the submission as Completed
 router.post("/:id/approve", async (req: AuthRequest, res: Response) => {
   const email = req.user?.email ?? null;
-  if (!email) { res.status(401).json({ success: false, error: "Not authenticated." }); return; }
+  if (!email) { res.status(401).json({ success: false, error: "Not authenticated.", code: "NOT_AUTHENTICATED" }); return; }
 
   const { signatureToken } = req.body;
   if (!signatureToken) {
-    res.status(400).json({ success: false, error: "Your signature token is required to approve." });
+    res.status(400).json({ success: false, error: "Your signature token is required to approve.", code: "YOUR_SIGNATURE_TOKEN_IS_REQUIR" });
     return;
   }
 
@@ -672,11 +672,11 @@ router.post("/:id/approve", async (req: AuthRequest, res: Response) => {
   });
 
   if (!sub || sub.status !== "Awaiting Final Approval") {
-    res.status(400).json({ success: false, error: "Submission is not awaiting final approval." });
+    res.status(400).json({ success: false, error: "Submission is not awaiting final approval.", code: "SUBMISSION_IS_NOT_AWAITING_FIN" });
     return;
   }
   if (sub.approverEmail?.toLowerCase() !== email.toLowerCase()) {
-    res.status(403).json({ success: false, error: "You are not the designated approver." });
+    res.status(403).json({ success: false, error: "You are not the designated approver.", code: "YOU_ARE_NOT_THE_DESIGNATED_APP" });
     return;
   }
 
@@ -684,7 +684,7 @@ router.post("/:id/approve", async (req: AuthRequest, res: Response) => {
   const hashedInput = hashToken(signatureToken);
   const secData = await prisma.securityData.findFirst({ where: { userEmail: { equals: email!, mode: "insensitive" } } });
   if (!secData || secData.hashedToken !== hashedInput) {
-    res.status(400).json({ success: false, error: "Invalid signature token. Please check and try again." });
+    res.status(400).json({ success: false, error: "Invalid signature token. Please check and try again.", code: "INVALID_SIGNATURE_TOKEN_PLEASE" });
     return;
   }
 
@@ -755,7 +755,7 @@ router.post("/:id/approve", async (req: AuthRequest, res: Response) => {
 // Final approver declines → submission reverts to Processing (no signatory row needed)
 router.post("/:id/decline-final", async (req: AuthRequest, res: Response) => {
   const email = req.user?.email ?? null;
-  if (!email) { res.status(401).json({ success: false, error: "Not authenticated." }); return; }
+  if (!email) { res.status(401).json({ success: false, error: "Not authenticated.", code: "NOT_AUTHENTICATED" }); return; }
 
   const sub = await prisma.formSubmission.findUnique({
     where: { id: req.params.id },
@@ -763,11 +763,11 @@ router.post("/:id/decline-final", async (req: AuthRequest, res: Response) => {
   });
 
   if (!sub || sub.status !== "Awaiting Final Approval") {
-    res.status(400).json({ success: false, error: "Submission is not awaiting final approval." });
+    res.status(400).json({ success: false, error: "Submission is not awaiting final approval.", code: "SUBMISSION_IS_NOT_AWAITING_FIN" });
     return;
   }
   if (sub.approverEmail?.toLowerCase() !== email.toLowerCase()) {
-    res.status(403).json({ success: false, error: "You are not the designated approver." });
+    res.status(403).json({ success: false, error: "You are not the designated approver.", code: "YOU_ARE_NOT_THE_DESIGNATED_APP" });
     return;
   }
 
@@ -808,11 +808,11 @@ router.post("/:id/decline-final", async (req: AuthRequest, res: Response) => {
 // Final approver permanently disapproves the submission → status changes to "Not Approved"
 router.post("/:id/disapprove-final", async (req: AuthRequest, res: Response) => {
   const email = req.user?.email ?? null;
-  if (!email) { res.status(401).json({ success: false, error: "Not authenticated." }); return; }
+  if (!email) { res.status(401).json({ success: false, error: "Not authenticated.", code: "NOT_AUTHENTICATED" }); return; }
 
   const { reason } = req.body;
   if (!reason || !reason.trim()) {
-    res.status(400).json({ success: false, error: "A reason is required to disapprove." });
+    res.status(400).json({ success: false, error: "A reason is required to disapprove.", code: "A_REASON_IS_REQUIRED_TO_DISAPP" });
     return;
   }
 
@@ -822,11 +822,11 @@ router.post("/:id/disapprove-final", async (req: AuthRequest, res: Response) => 
   });
 
   if (!sub || sub.status !== "Awaiting Final Approval") {
-    res.status(400).json({ success: false, error: "Submission is not awaiting final approval." });
+    res.status(400).json({ success: false, error: "Submission is not awaiting final approval.", code: "SUBMISSION_IS_NOT_AWAITING_FIN" });
     return;
   }
   if (sub.approverEmail?.toLowerCase() !== email.toLowerCase()) {
-    res.status(403).json({ success: false, error: "You are not the designated approver." });
+    res.status(403).json({ success: false, error: "You are not the designated approver.", code: "YOU_ARE_NOT_THE_DESIGNATED_APP" });
     return;
   }
 
@@ -893,25 +893,25 @@ router.post("/:id/disapprove-final", async (req: AuthRequest, res: Response) => 
 // ── POST /api/v1/workflow/:id/sign ────────────────────────────────────────────
 router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
   const email = req.user?.email ?? null;
-  if (!email) { res.status(401).json({ success: false, error: "Not authenticated." }); return; }
+  if (!email) { res.status(401).json({ success: false, error: "Not authenticated.", code: "NOT_AUTHENTICATED" }); return; }
 
   const { signatureData, signatureToken, annotations } = req.body;
   let finalSignatureData: string | null = signatureData ?? null;
 
   if (signatureToken) {
     const userEmail = req.user?.email;
-    if (!userEmail) { res.status(401).json({ success: false, error: "Not logged in" }); return; }
+    if (!userEmail) { res.status(401).json({ success: false, error: "Not logged in", code: "NOT_LOGGED_IN" }); return; }
     const hashedInput = hashToken(signatureToken);
     const secData = await prisma.securityData.findFirst({ where: { userEmail: { equals: userEmail!, mode: "insensitive" } } });
     if (!secData || secData.hashedToken !== hashedInput) {
-      res.status(400).json({ success: false, error: "Invalid signature token." });
+      res.status(400).json({ success: false, error: "Invalid signature token.", code: "INVALID_SIGNATURE_TOKEN" });
       return;
     }
     finalSignatureData = decrypt(secData.encryptedSignature);
   }
 
   if (!finalSignatureData) {
-    res.status(400).json({ success: false, error: "No signature provided." });
+    res.status(400).json({ success: false, error: "No signature provided.", code: "NO_SIGNATURE_PROVIDED" });
     return;
   }
 
@@ -924,7 +924,7 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
   });
 
   if (!sigRow) {
-    res.status(404).json({ success: false, error: "Signatory record not found or already signed." });
+    res.status(404).json({ success: false, error: "Signatory record not found or already signed.", code: "SIGNATORY_RECORD_NOT_FOUND_OR" });
     return;
   }
 
@@ -1111,7 +1111,7 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
 // ── POST /api/v1/workflow/:id/decline ────────────────────────────────────────
 router.post("/:id/decline", async (req: AuthRequest, res: Response) => {
   const email = req.user?.email ?? null;
-  if (!email) { res.status(401).json({ success: false, error: "Not authenticated." }); return; }
+  if (!email) { res.status(401).json({ success: false, error: "Not authenticated.", code: "NOT_AUTHENTICATED" }); return; }
 
   const { reason } = req.body; // optional decline reason
 
@@ -1124,7 +1124,7 @@ router.post("/:id/decline", async (req: AuthRequest, res: Response) => {
   });
 
   if (!sigRow) {
-    res.status(404).json({ success: false, error: "Signatory record not found." });
+    res.status(404).json({ success: false, error: "Signatory record not found.", code: "SIGNATORY_RECORD_NOT_FOUND" });
     return;
   }
 
@@ -1179,11 +1179,11 @@ router.post("/:id/decline", async (req: AuthRequest, res: Response) => {
 // ── POST /api/v1/workflow/:id/disapprove-signatory ───────────────────────────
 router.post("/:id/disapprove-signatory", async (req: AuthRequest, res: Response) => {
   const email = req.user?.email ?? null;
-  if (!email) { res.status(401).json({ success: false, error: "Not authenticated." }); return; }
+  if (!email) { res.status(401).json({ success: false, error: "Not authenticated.", code: "NOT_AUTHENTICATED" }); return; }
 
   const { reason } = req.body;
   if (!reason || !reason.trim()) {
-    res.status(400).json({ success: false, error: "A reason is required to disapprove." });
+    res.status(400).json({ success: false, error: "A reason is required to disapprove.", code: "A_REASON_IS_REQUIRED_TO_DISAPP" });
     return;
   }
 
@@ -1196,7 +1196,7 @@ router.post("/:id/disapprove-signatory", async (req: AuthRequest, res: Response)
   });
 
   if (!sigRow) {
-    res.status(404).json({ success: false, error: "Signatory record not found." });
+    res.status(404).json({ success: false, error: "Signatory record not found.", code: "SIGNATORY_RECORD_NOT_FOUND" });
     return;
   }
 
@@ -1283,19 +1283,19 @@ router.post("/:id/remind/:signatoryId", async (req: AuthRequest, res: Response) 
     },
   });
 
-  if (!submission) { res.status(404).json({ success: false, error: "Submission not found" }); return; }
+  if (!submission) { res.status(404).json({ success: false, error: "Submission not found", code: "SUBMISSION_NOT_FOUND" }); return; }
 
   const signatory = await prisma.submissionSignatory.findUnique({
     where: { id: req.params.signatoryId },
   });
 
   if (!signatory || signatory.submissionId !== req.params.id) {
-    res.status(404).json({ success: false, error: "Signatory not found" });
+    res.status(404).json({ success: false, error: "Signatory not found", code: "SIGNATORY_NOT_FOUND" });
     return;
   }
 
   if (signatory.status !== "Pending") {
-    res.status(400).json({ success: false, error: `This signatory has already ${signatory.status.toLowerCase()} the form.` });
+    res.status(400).json({ success: false, error: `This signatory has already ${signatory.status.toLowerCase()} the form.`, code: "THIS_SIGNATORY_HAS_ALREADY_SIG" });
     return;
   }
 
@@ -1338,14 +1338,14 @@ router.post("/:id/generate-pdf", async (req: AuthRequest, res: Response) => {
   });
 
   if (!submission) {
-    res.status(404).json({ success: false, error: "Submission not found" });
+    res.status(404).json({ success: false, error: "Submission not found", code: "SUBMISSION_NOT_FOUND" });
     return;
   }
 
   try {
     const pdfResult = await generateSubmissionPdf(req.params.id);
     if (!pdfResult) {
-      res.status(400).json({ success: false, error: "Could not generate PDF backend output" });
+      res.status(400).json({ success: false, error: "Could not generate PDF backend output", code: "COULD_NOT_GENERATE_PDF_BACKEND" });
       return;
     }
 
@@ -1385,11 +1385,11 @@ router.post("/:id/generate-pdf", async (req: AuthRequest, res: Response) => {
 
       res.json({ success: true, message: "PDF generated and attached successfully." });
     } else {
-      res.status(500).json({ success: false, error: "Failed to store PDF." });
+      res.status(500).json({ success: false, error: "Failed to store PDF.", code: "FAILED_TO_STORE_PDF" });
     }
   } catch (err: any) {
     console.error("Error manually generating PDF:", err);
-    res.status(500).json({ success: false, error: err.message || "Error generating PDF" });
+    res.status(500).json({ success: false, error: err.message || "Error generating PDF", code: "INTERNALSERVERERROR" });
   }
 });
 

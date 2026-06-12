@@ -37,7 +37,7 @@ function isAdmin(req: AuthRequest): boolean {
 // ── GET /api/v1/reports ───────────────────────────────────────────────────────
 // Admin: list all reports with their access lists
 router.get("/", async (req: AuthRequest, res: Response) => {
-  if (!isAdmin(req)) { res.status(403).json({ success: false, error: "Forbidden: Administrators only" }); return; }
+  if (!isAdmin(req)) { res.status(403).json({ success: false, error: "Forbidden: Administrators only", code: "FORBIDDEN_ADMINISTRATORS_ONLY" }); return; }
 
   const reports = await prisma.report.findMany({
     orderBy: { createdAt: "desc" },
@@ -52,7 +52,7 @@ router.get("/", async (req: AuthRequest, res: Response) => {
 // NOTE: must be registered BEFORE /:id to avoid being matched as an id
 router.get("/my-reports", async (req: AuthRequest, res: Response) => {
   const email = req.user?.email;
-  if (!email) { res.status(401).json({ success: false, error: "Unauthenticated" }); return; }
+  if (!email) { res.status(401).json({ success: false, error: "Unauthenticated", code: "UNAUTHENTICATED" }); return; }
 
   let reports;
 
@@ -77,14 +77,14 @@ router.get("/my-reports", async (req: AuthRequest, res: Response) => {
 // ── GET /api/v1/reports/:id ───────────────────────────────────────────────────
 // Admin: get full report details including script and access list
 router.get("/:id", async (req: AuthRequest, res: Response) => {
-  if (!isAdmin(req)) { res.status(403).json({ success: false, error: "Forbidden: Administrators only" }); return; }
+  if (!isAdmin(req)) { res.status(403).json({ success: false, error: "Forbidden: Administrators only", code: "FORBIDDEN_ADMINISTRATORS_ONLY" }); return; }
 
   const report = await prisma.report.findUnique({
     where: { id: req.params.id },
     include: { access: { select: { userEmail: true, grantedAt: true } } },
   });
 
-  if (!report) { res.status(404).json({ success: false, error: "Report not found" }); return; }
+  if (!report) { res.status(404).json({ success: false, error: "Report not found", code: "REPORT_NOT_FOUND" }); return; }
 
   res.json({ success: true, data: report });
 });
@@ -95,23 +95,23 @@ router.post("/", requireAdmin as any, async (req: AuthRequest, res: Response) =>
   const { name, description, script, reportType = "manual", formTemplateId, formStatuses, granted_emails = [] } = req.body;
 
   if (!name || !description) {
-    res.status(400).json({ success: false, error: "name and description are required" });
+    res.status(400).json({ success: false, error: "name and description are required", code: "NAME_AND_DESCRIPTION_ARE_REQUI" });
     return;
   }
 
   if (reportType === "manual" && !script) {
-    res.status(400).json({ success: false, error: "script is required for manual reports" });
+    res.status(400).json({ success: false, error: "script is required for manual reports", code: "SCRIPT_IS_REQUIRED_FOR_MANUAL" });
     return;
   }
 
   if (reportType === "form" && !formTemplateId) {
-    res.status(400).json({ success: false, error: "formTemplateId is required for form-based reports" });
+    res.status(400).json({ success: false, error: "formTemplateId is required for form-based reports", code: "FORMTEMPLATEID_IS_REQUIRED_FOR" });
     return;
   }
 
   const { valid, invalid } = await resolveGrantedEmails(granted_emails);
   if (invalid.length > 0) {
-    res.status(400).json({ success: false, error: `The following emails were not found as active users: ${invalid.join(", ")}` });
+    res.status(400).json({ success: false, error: `The following emails were not found as active users: ${invalid.join(", ")}`, code: "THE_FOLLOWING_EMAILS_WERE_NOT" });
     return;
   }
 
@@ -140,14 +140,14 @@ router.put("/:id", requireAdmin as any, async (req: AuthRequest, res: Response) 
   const { name, description, script, reportType, formTemplateId, formStatuses, granted_emails } = req.body;
 
   const existing = await prisma.report.findUnique({ where: { id: req.params.id } });
-  if (!existing) { res.status(404).json({ success: false, error: "Report not found" }); return; }
+  if (!existing) { res.status(404).json({ success: false, error: "Report not found", code: "REPORT_NOT_FOUND" }); return; }
 
   // Resolve emails if provided
   let validEmails: string[] | undefined;
   if (granted_emails !== undefined) {
     const { valid, invalid } = await resolveGrantedEmails(granted_emails);
     if (invalid.length > 0) {
-      res.status(400).json({ success: false, error: `The following emails were not found as active users: ${invalid.join(", ")}` });
+      res.status(400).json({ success: false, error: `The following emails were not found as active users: ${invalid.join(", ")}`, code: "THE_FOLLOWING_EMAILS_WERE_NOT" });
       return;
     }
     validEmails = valid;
@@ -188,7 +188,7 @@ router.put("/:id", requireAdmin as any, async (req: AuthRequest, res: Response) 
 // Admin: delete a report (cascade deletes access records)
 router.delete("/:id", requireAdmin as any, async (req: AuthRequest, res: Response) => {
   const existing = await prisma.report.findUnique({ where: { id: req.params.id } });
-  if (!existing) { res.status(404).json({ success: false, error: "Report not found" }); return; }
+  if (!existing) { res.status(404).json({ success: false, error: "Report not found", code: "REPORT_NOT_FOUND" }); return; }
 
   await prisma.report.delete({ where: { id: req.params.id } });
   res.json({ success: true });
@@ -201,26 +201,26 @@ router.delete("/:id", requireAdmin as any, async (req: AuthRequest, res: Respons
 // ── POST /api/v1/reports/:id/spool ───────────────────────────────────────────
 router.post("/:id/spool", async (req: AuthRequest, res: Response) => {
   const email = req.user?.email;
-  if (!email) { res.status(401).json({ success: false, error: "Unauthenticated" }); return; }
+  if (!email) { res.status(401).json({ success: false, error: "Unauthenticated", code: "UNAUTHENTICATED" }); return; }
 
   const report = await prisma.report.findUnique({
     where: { id: req.params.id },
     include: { access: { select: { userEmail: true } } },
   });
 
-  if (!report) { res.status(404).json({ success: false, error: "Report not found" }); return; }
+  if (!report) { res.status(404).json({ success: false, error: "Report not found", code: "REPORT_NOT_FOUND" }); return; }
 
   // Check access
   const hasAccess = isAdmin(req) || report.access.some(
     (a: any) => a.userEmail.toLowerCase() === email.toLowerCase()
   );
-  if (!hasAccess) { res.status(403).json({ success: false, error: "You do not have access to this report" }); return; }
+  if (!hasAccess) { res.status(403).json({ success: false, error: "You do not have access to this report", code: "YOU_DO_NOT_HAVE_ACCESS_TO_THIS" }); return; }
 
   // ── Validate parameters ───────────────────────────────────────────────────
   const { from_date, to_date, branch } = req.body;
 
   if (!from_date || !to_date || !branch) {
-    res.status(400).json({ success: false, error: "from_date, to_date, and branch are required" });
+    res.status(400).json({ success: false, error: "from_date, to_date, and branch are required", code: "FROMDATE_TODATE_AND_BRANCH_ARE" });
     return;
   }
 
@@ -229,14 +229,14 @@ router.post("/:id/spool", async (req: AuthRequest, res: Response) => {
   // Extend toDate to end of day so submissions on the last day are included
   toDate.setHours(23, 59, 59, 999);
 
-  if (isNaN(fromDate.getTime())) { res.status(400).json({ success: false, error: "from_date is not a valid date" }); return; }
-  if (isNaN(toDate.getTime())) { res.status(400).json({ success: false, error: "to_date is not a valid date" }); return; }
-  if (toDate < fromDate) { res.status(400).json({ success: false, error: "to_date must not be before from_date" }); return; }
+  if (isNaN(fromDate.getTime())) { res.status(400).json({ success: false, error: "from_date is not a valid date", code: "FROMDATE_IS_NOT_A_VALID_DATE" }); return; }
+  if (isNaN(toDate.getTime())) { res.status(400).json({ success: false, error: "to_date is not a valid date", code: "TODATE_IS_NOT_A_VALID_DATE" }); return; }
+  if (toDate < fromDate) { res.status(400).json({ success: false, error: "to_date must not be before from_date", code: "TODATE_MUST_NOT_BE_BEFORE_FROM" }); return; }
 
   // ── Form-based report: dynamically query FormSubmission records ───────────
   if (report.reportType === "form") {
     if (!report.formTemplateId) {
-      res.status(400).json({ success: false, error: "This report has no form template linked." });
+      res.status(400).json({ success: false, error: "This report has no form template linked.", code: "THIS_REPORT_HAS_NO_FORM_TEMPLA" });
       return;
     }
 
@@ -294,7 +294,7 @@ router.post("/:id/spool", async (req: AuthRequest, res: Response) => {
       res.json({ success: true, data: rows, reportType: "form", count: rows.length });
     } catch (err: any) {
       console.error("Form report spool error:", err);
-      res.status(200).json({ success: false, error: `Report execution failed: ${err?.message ?? String(err)}` });
+      res.status(200).json({ success: false, error: `Report execution failed: ${err?.message ?? String(err)}`, code: "REPORT_EXECUTION_FAILED_ERRMES" });
     }
     return;
   }
@@ -308,11 +308,11 @@ router.post("/:id/spool", async (req: AuthRequest, res: Response) => {
       },
       select: { id: true },
     });
-    if (!branchExists) { res.status(400).json({ success: false, error: `Branch "${branch}" does not exist` }); return; }
+    if (!branchExists) { res.status(400).json({ success: false, error: `Branch "${branch}" does not exist`, code: "BRANCH_BRANCH_DOES_NOT_EXIST" }); return; }
   }
 
   if (!report.script) {
-    res.status(400).json({ success: false, error: "This report has no SQL script configured." });
+    res.status(400).json({ success: false, error: "This report has no SQL script configured.", code: "THIS_REPORT_HAS_NO_SQL_SCRIPT" });
     return;
   }
 

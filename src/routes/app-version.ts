@@ -26,7 +26,7 @@ router.put("/", authenticate as any, requireAdmin as any, async (req: AuthReques
   const { version, downloadUrl, releaseNotes } = req.body;
 
   if (!version || !downloadUrl) {
-    res.status(400).json({ success: false, error: "version and downloadUrl are required" });
+    res.status(400).json({ success: false, error: "version and downloadUrl are required", code: "VERSION_AND_DOWNLOADURL_ARE_RE" });
     return;
   }
 

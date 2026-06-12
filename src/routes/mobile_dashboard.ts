@@ -7,13 +7,13 @@ const router = Router();
 router.get("/", async (req: Request, res: Response) => {
   const userId = req.query.userId as string | undefined;
   if (!userId) {
-    res.status(400).json({ success: false, error: "userId is required" });
+    res.status(400).json({ success: false, error: "userId is required", code: "USERID_IS_REQUIRED" });
     return;
   }
 
   const userIdInt = parseInt(userId);
   if (isNaN(userIdInt)) {
-    res.status(400).json({ success: false, error: "userId must be a number" });
+    res.status(400).json({ success: false, error: "userId must be a number", code: "USERID_MUST_BE_A_NUMBER" });
     return;
   }
 

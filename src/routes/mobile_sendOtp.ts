@@ -9,7 +9,7 @@ const router = Router();
 router.post("/", async (req: Request, res: Response) => {
   const { email } = req.body;
   if (!email) {
-    res.status(400).json({ success: false, error: "Email required" });
+    res.status(400).json({ success: false, error: "Email required", code: "EMAIL_REQUIRED" });
     return;
   }
 
@@ -21,7 +21,7 @@ router.post("/", async (req: Request, res: Response) => {
   });
 
   if (users.length === 0) {
-    res.status(400).json({ success: false, error: "No active user found with this email." });
+    res.status(400).json({ success: false, error: "No active user found with this email.", code: "NO_ACTIVE_USER_FOUND_WITH_THIS" });
     return;
   }
 

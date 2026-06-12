@@ -39,7 +39,7 @@ router.get("/public/:prereqSubmissionId", async (req, res: Response) => {
   });
 
   if (!prereq || !prereq.prereqSubmission) {
-    res.status(404).json({ success: false, error: "Prerequisite not found." });
+    res.status(404).json({ success: false, error: "Prerequisite not found.", code: "PREREQUISITE_NOT_FOUND" });
     return;
   }
 
@@ -60,17 +60,17 @@ router.post("/:id/remind", async (req: AuthRequest, res: Response) => {
   });
 
   if (!prereq) {
-    res.status(404).json({ success: false, error: "Prerequisite not found." });
+    res.status(404).json({ success: false, error: "Prerequisite not found.", code: "PREREQUISITE_NOT_FOUND" });
     return;
   }
 
   if (prereq.status !== "Pending" && prereq.status !== "Active") {
-    res.status(400).json({ success: false, error: "Can only remind pending or active prerequisites." });
+    res.status(400).json({ success: false, error: "Can only remind pending or active prerequisites.", code: "CAN_ONLY_REMIND_PENDING_OR_ACT" });
     return;
   }
 
   if (!prereq.prereqSubmission) {
-    res.status(400).json({ success: false, error: "Prerequisite draft missing." });
+    res.status(400).json({ success: false, error: "Prerequisite draft missing.", code: "PREREQUISITE_DRAFT_MISSING" });
     return;
   }
 
@@ -78,7 +78,7 @@ router.post("/:id/remind", async (req: AuthRequest, res: Response) => {
     const targetEmail = prereq.targetEmail;
     const targetFormName = prereq.targetForm?.name ?? "Form";
     if (!targetEmail) {
-      res.status(400).json({ success: false, error: "No target email specified." });
+      res.status(400).json({ success: false, error: "No target email specified.", code: "NO_TARGET_EMAIL_SPECIFIED" });
       return;
     }
 
@@ -111,7 +111,7 @@ router.post("/:id/remind", async (req: AuthRequest, res: Response) => {
     res.json({ success: true, message: "Reminder sent successfully." });
   } catch (error: any) {
     console.error("[prereq remind]", error);
-    res.status(500).json({ success: false, error: "Failed to send reminder email." });
+    res.status(500).json({ success: false, error: "Failed to send reminder email.", code: "FAILED_TO_SEND_REMINDER_EMAIL" });
   }
 });
 
@@ -122,7 +122,7 @@ router.post("/:id/decline", async (req: AuthRequest, res: Response) => {
   const email = req.user?.email ?? null;
 
   if (!reason || typeof reason !== "string") {
-    res.status(400).json({ success: false, error: "Decline reason is required." });
+    res.status(400).json({ success: false, error: "Decline reason is required.", code: "DECLINE_REASON_IS_REQUIRED" });
     return;
   }
 
@@ -137,12 +137,12 @@ router.post("/:id/decline", async (req: AuthRequest, res: Response) => {
   });
 
   if (!prereq) {
-    res.status(404).json({ success: false, error: "Prerequisite not found." });
+    res.status(404).json({ success: false, error: "Prerequisite not found.", code: "PREREQUISITE_NOT_FOUND" });
     return;
   }
 
   if (prereq.status === "Approved" || prereq.status === "Declined") {
-    res.status(400).json({ success: false, error: "Prerequisite already processed." });
+    res.status(400).json({ success: false, error: "Prerequisite already processed.", code: "PREREQUISITE_ALREADY_PROCESSED" });
     return;
   }
 
@@ -212,7 +212,7 @@ router.post("/:id/decline", async (req: AuthRequest, res: Response) => {
     res.json({ success: true, message: "Prerequisite declined." });
   } catch (error: any) {
     console.error("[prereq decline]", error);
-    res.status(500).json({ success: false, error: "Failed to decline prerequisite." });
+    res.status(500).json({ success: false, error: "Failed to decline prerequisite.", code: "FAILED_TO_DECLINE_PREREQUISITE" });
   }
 });
 

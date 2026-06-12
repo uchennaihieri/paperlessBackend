@@ -34,7 +34,7 @@ router.get("/", async (req: AuthRequest, res: Response) => {
     res.json({ success: true, data: lists });
   } catch (err) {
     console.error("Error fetching reusable lists:", err);
-    res.status(500).json({ success: false, error: "Failed to fetch reusable lists." });
+    res.status(500).json({ success: false, error: "Failed to fetch reusable lists.", code: "FAILED_TO_FETCH_REUSABLE_LISTS" });
   }
 });
 
@@ -46,13 +46,13 @@ router.get("/:id", async (req: AuthRequest, res: Response) => {
       where: { id: req.params.id },
     });
     if (!list) {
-      res.status(404).json({ success: false, error: "List not found" });
+      res.status(404).json({ success: false, error: "List not found", code: "LIST_NOT_FOUND" });
       return;
     }
     res.json({ success: true, data: list });
   } catch (err) {
     console.error("Error fetching reusable list:", err);
-    res.status(500).json({ success: false, error: "Failed to fetch reusable list." });
+    res.status(500).json({ success: false, error: "Failed to fetch reusable list.", code: "FAILED_TO_FETCH_REUSABLE_LIST" });
   }
 });
 
@@ -64,12 +64,12 @@ router.post("/upload", requireAdmin as any, upload.single("file"), async (req: A
     const file = req.file;
 
     if (!file) {
-      res.status(400).json({ success: false, error: "No file uploaded." });
+      res.status(400).json({ success: false, error: "No file uploaded.", code: "NO_FILE_UPLOADED" });
       return;
     }
 
     if (!name || name.trim() === "") {
-      res.status(400).json({ success: false, error: "List name is required." });
+      res.status(400).json({ success: false, error: "List name is required.", code: "LIST_NAME_IS_REQUIRED" });
       return;
     }
 
@@ -93,7 +93,7 @@ router.post("/upload", requireAdmin as any, upload.single("file"), async (req: A
     }
 
     if (items.length === 0) {
-      res.status(400).json({ success: false, error: "The uploaded file contains no valid items in the first column." });
+      res.status(400).json({ success: false, error: "The uploaded file contains no valid items in the first column.", code: "THE_UPLOADED_FILE_CONTAINS_NO" });
       return;
     }
 
@@ -112,9 +112,9 @@ router.post("/upload", requireAdmin as any, upload.single("file"), async (req: A
   } catch (err: any) {
     console.error("Error uploading reusable list:", err);
     if (err?.code === "P2002") {
-      res.status(409).json({ success: false, error: "A list with this name already exists." });
+      res.status(409).json({ success: false, error: "A list with this name already exists.", code: "A_LIST_WITH_THIS_NAME_ALREADY" });
     } else {
-      res.status(500).json({ success: false, error: "Failed to process the uploaded file." });
+      res.status(500).json({ success: false, error: "Failed to process the uploaded file.", code: "FAILED_TO_PROCESS_THE_UPLOADED" });
     }
   }
 });
@@ -128,7 +128,7 @@ router.delete("/:id", requireAdmin as any, async (req: AuthRequest, res: Respons
     res.json({ success: true });
   } catch (err) {
     console.error("Error deleting reusable list:", err);
-    res.status(500).json({ success: false, error: "Failed to delete reusable list." });
+    res.status(500).json({ success: false, error: "Failed to delete reusable list.", code: "FAILED_TO_DELETE_REUSABLE_LIST" });
   }
 });
 

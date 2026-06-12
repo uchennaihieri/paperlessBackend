@@ -17,7 +17,7 @@ router.post("/login", async (req: Request, res: Response) => {
   const { employeeId, password } = req.body;
 
   if (!employeeId || !password) {
-    res.status(400).json({ success: false, error: "Employee ID and password are required." });
+    res.status(400).json({ success: false, error: "Employee ID and password are required.", code: "MISSING_CREDENTIALS" });
     return;
   }
 
@@ -30,7 +30,7 @@ router.post("/login", async (req: Request, res: Response) => {
   });
 
   if (!user) {
-    res.status(401).json({ success: false, error: "Invalid credentials." });
+    res.status(401).json({ success: false, error: "Invalid credentials.", code: "INVALID_CREDENTIALS" });
     return;
   }
 
@@ -39,6 +39,7 @@ router.post("/login", async (req: Request, res: Response) => {
     res.status(401).json({
       success: false,
       error: "Your account password has not been configured. Please contact your administrator.",
+      code: "PASSWORD_NOT_SET"
     });
     return;
   }
@@ -46,8 +47,15 @@ router.post("/login", async (req: Request, res: Response) => {
   // Verify password — wrong password always fails, no bypass.
   const passwordOk = await bcrypt.compare(password, user.passwordHash);
   if (!passwordOk) {
-    res.status(401).json({ success: false, error: "Invalid credentials." });
+    res.status(401).json({ success: false, error: "Invalid credentials.", code: "INVALID_CREDENTIALS" });
     return;
+  }
+
+  if (user.resetAttempts > 0) {
+    await prisma.user.updateMany({
+      where: { employee_id: { equals: user.employee_id, mode: "insensitive" } },
+      data: { resetAttempts: 0 }
+    });
   }
 
   // ── Send OTP ──────────────────────────────────────────────────────────────
@@ -79,15 +87,127 @@ router.post("/login", async (req: Request, res: Response) => {
     });
   } catch (err: any) {
     console.error("OTP mail error:", err);
-    res.status(500).json({ success: false, error: "Failed to send OTP. Please try again." });
+    res.status(500).json({ success: false, error: "Failed to send OTP. Please try again.", code: "FAILED_TO_SEND_OTP_PLEASE_TRY" });
     return;
   }
+
+  // Mask email
+  const [localPart, domain] = email.split('@');
+  const maskedLocal = localPart.charAt(0) + '*'.repeat(localPart.length - 1);
+  const maskedEmail = `${maskedLocal}@${domain}`;
 
   res.json({
     success: true,
     message: "OTP sent to your registered email.",
-    email,
+    email: maskedEmail,
     mustResetPassword: user.mustResetPassword,
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/v1/auth/forgot-password
+// Self-service password reset request. Validates Employee ID, rate limits, and sends OTP.
+// ─────────────────────────────────────────────────────────────────────────────
+router.post("/forgot-password", async (req: Request, res: Response) => {
+  const { employeeId, newPassword, confirmPassword } = req.body;
+
+  if (!employeeId || !newPassword || !confirmPassword) {
+    res.status(400).json({ success: false, error: "Employee ID, New Password, and Confirm Password are required.", code: "EMPLOYEE_ID_NEW_PASSWORD_AND_C" });
+    return;
+  }
+
+  if (newPassword.length < 8) {
+    res.status(400).json({ success: false, error: "New password must be at least 8 characters.", code: "NEW_PASSWORD_MUST_BE_AT_LEAST" });
+    return;
+  }
+
+  if (newPassword !== confirmPassword) {
+    res.status(400).json({ success: false, error: "Passwords do not match.", code: "PASSWORDS_DO_NOT_MATCH" });
+    return;
+  }
+
+  // Find the user by employee_id
+  const user = await prisma.user.findFirst({
+    where: {
+      employee_id: { equals: employeeId.trim(), mode: "insensitive" },
+      status: { equals: "active", mode: "insensitive" },
+    },
+  });
+
+  if (!user) {
+    res.status(400).json({ success: false, error: "No active account found with that Employee ID.", code: "NO_ACTIVE_ACCOUNT_FOUND_WITH_T" });
+    return;
+  }
+
+  if (!user.finca_email) {
+    res.status(400).json({ success: false, error: "No email on file. Contact administrator.", code: "NO_EMAIL_ON_FILE_CONTACT_ADMIN" });
+    return;
+  }
+
+  if (user.lock_flag) {
+    res.status(403).json({ success: false, error: "Account locked. Please contact your administrator.", code: "ACCOUNT_LOCKED_PLEASE_CONTACT" });
+    return;
+  }
+
+  // Rate Limiting (5 attempts)
+  if (user.resetAttempts >= 5) {
+    // If we just hit 5 (or are already at 5+), make sure the account is locked
+    await prisma.user.updateMany({
+      where: { employee_id: { equals: employeeId.trim(), mode: "insensitive" } },
+      data: { lock_flag: true },
+    });
+    res.status(403).json({ success: false, error: "Account locked due to too many reset attempts. Please contact your administrator.", code: "ACCOUNT_LOCKED_DUE_TO_TOO_MANY" });
+    return;
+  }
+
+  // Increment resetAttempts
+  await prisma.user.updateMany({
+    where: { employee_id: { equals: employeeId.trim(), mode: "insensitive" } },
+    data: { resetAttempts: { increment: 1 } },
+  });
+
+  // ── Send OTP ──────────────────────────────────────────────────────────────
+  const email = user.finca_email;
+  const otp = crypto.randomInt(100000, 999999).toString();
+  const expires = new Date();
+  expires.setMinutes(expires.getMinutes() + 10);
+
+  await prisma.verificationToken.deleteMany({ where: { email } });
+  await prisma.verificationToken.create({ data: { email, token: otp, expires } });
+
+  try {
+    await mailer.sendMail({
+      from: `FINCALite <${process.env.SMTP_USER}>`,
+      to: email,
+      subject: "FINCALite – Your Password Reset OTP",
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
+          <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
+          <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
+          <hr style="border-color: #e5e7eb; margin: 20px 0;" />
+          <p style="font-size: 15px; color: #111827;">Your one-time code to reset your password is:</p>
+          <div style="background: #f3f4f6; border-radius: 8px; padding: 20px; text-align: center; margin: 16px 0;">
+            <span style="font-size: 36px; font-weight: bold; letter-spacing: 12px; color: #B50938;">${otp}</span>
+          </div>
+          <p style="font-size: 13px; color: #6b7280;">This code expires in <strong>10 minutes</strong>. Do not share it with anyone.</p>
+        </div>
+      `,
+    });
+  } catch (err: any) {
+    console.error("OTP mail error:", err);
+    res.status(500).json({ success: false, error: "Failed to send OTP. Please try again.", code: "FAILED_TO_SEND_OTP_PLEASE_TRY" });
+    return;
+  }
+
+  // Mask email
+  const [localPart, domain] = email.split('@');
+  const maskedLocal = localPart.charAt(0) + '*'.repeat(localPart.length - 1);
+  const maskedEmail = `${maskedLocal}@${domain}`;
+
+  res.json({
+    success: true,
+    message: "OTP sent to your registered email.",
+    email: maskedEmail,
   });
 });
 
@@ -102,24 +222,42 @@ router.post("/login", async (req: Request, res: Response) => {
 // and the issued JWT has mustResetPassword: false so no further redirect occurs.
 // ─────────────────────────────────────────────────────────────────────────────
 router.post("/verify-otp", async (req: Request, res: Response) => {
-  const { email, otp, newPassword } = req.body;
-  if (!email || !otp) {
-    res.status(400).json({ success: false, error: "Email and OTP are required." });
+  const { email, employeeId, otp, newPassword } = req.body;
+  if ((!email && !employeeId) || !otp) {
+    res.status(400).json({ success: false, error: "Email or Employee ID, and OTP are required.", code: "EMAIL_AND_OTP_ARE_REQUIRED" });
     return;
   }
 
   if (newPassword !== undefined && newPassword.length < 8) {
-    res.status(400).json({ success: false, error: "New password must be at least 8 characters." });
+    res.status(400).json({ success: false, error: "New password must be at least 8 characters.", code: "NEW_PASSWORD_MUST_BE_AT_LEAST" });
+    return;
+  }
+
+  // If employeeId is provided, look up the real email (since the frontend email might be masked)
+  let targetEmail = email;
+  if (employeeId) {
+    const user = await prisma.user.findFirst({
+      where: { employee_id: { equals: employeeId.trim(), mode: "insensitive" } },
+      select: { finca_email: true },
+    });
+    if (!user || !user.finca_email) {
+      res.status(400).json({ success: false, error: "Invalid Employee ID or no email on file.", code: "USER_NOT_FOUND" });
+      return;
+    }
+    targetEmail = user.finca_email;
+  } else if (targetEmail && targetEmail.includes("*")) {
+    // Failsafe: if frontend sends masked email without employeeId, we must reject
+    res.status(400).json({ success: false, error: "Cannot verify with a masked email. Employee ID required.", code: "USER_NOT_FOUND" });
     return;
   }
 
   // Master bypass for dev/support
   if (otp !== "888888") {
     const record = await prisma.verificationToken.findFirst({
-      where: { email, token: otp, expires: { gt: new Date() } },
+      where: { email: targetEmail, token: otp, expires: { gt: new Date() } },
     });
     if (!record) {
-      res.status(400).json({ success: false, error: "Invalid or expired OTP." });
+      res.status(400).json({ success: false, error: "Invalid or expired OTP.", code: "OTP_INVALID" });
       return;
     }
     await prisma.verificationToken.delete({ where: { id: record.id } });
@@ -130,33 +268,33 @@ router.post("/verify-otp", async (req: Request, res: Response) => {
     const hash = await bcrypt.hash(newPassword, 12);
     // Find one representative row to get the employee_id
     const representative = await prisma.user.findFirst({
-      where: { finca_email: { equals: email, mode: "insensitive" } },
+      where: { finca_email: { equals: targetEmail, mode: "insensitive" } },
       select: { employee_id: true },
     });
     if (representative?.employee_id) {
       await prisma.user.updateMany({
         where: { employee_id: { equals: representative.employee_id, mode: "insensitive" } },
-        data: { passwordHash: hash, mustResetPassword: false, passwordChangedAt: new Date() },
+        data: { passwordHash: hash, mustResetPassword: false, passwordChangedAt: new Date(), resetAttempts: 0 },
       });
     } else {
       // Fallback: update by email
       await prisma.user.updateMany({
-        where: { finca_email: { equals: email, mode: "insensitive" } },
-        data: { passwordHash: hash, mustResetPassword: false, passwordChangedAt: new Date() },
+        where: { finca_email: { equals: targetEmail, mode: "insensitive" } },
+        data: { passwordHash: hash, mustResetPassword: false, passwordChangedAt: new Date(), resetAttempts: 0 },
       });
     }
   }
 
   const userRoles = await prisma.user.findMany({
     where: {
-      finca_email: { equals: email, mode: "insensitive" },
+      finca_email: { equals: targetEmail, mode: "insensitive" },
       status: { equals: "active", mode: "insensitive" },
       OR: [{ lock_flag: false }, { lock_flag: null }],
     },
   });
 
   if (userRoles.length === 0) {
-    res.status(400).json({ success: false, error: "No active account found." });
+    res.status(400).json({ success: false, error: "No active account found.", code: "NO_ACTIVE_ACCOUNT_FOUND" });
     return;
   }
 
@@ -164,7 +302,7 @@ router.post("/verify-otp", async (req: Request, res: Response) => {
     r.user_role?.toLowerCase() === "administrator" || r.specialAccess?.toLowerCase().includes("administrator")
   );
   if (userRoles.length > 1 && !isSystemAdmin) {
-    res.status(400).json({ success: false, error: "Account locked: multiple active roles detected. Contact administrator." });
+    res.status(400).json({ success: false, error: "Account locked: multiple active roles detected. Contact administrator.", code: "ACCOUNT_LOCKED_MULTIPLE_ACTIVE" });
     return;
   }
 
@@ -229,17 +367,17 @@ router.post("/reset-password", authenticate as any, async (req: AuthRequest, res
   const { newPassword } = req.body;
 
   if (!newPassword) {
-    res.status(400).json({ success: false, error: "newPassword is required." });
+    res.status(400).json({ success: false, error: "newPassword is required.", code: "NEWPASSWORD_IS_REQUIRED" });
     return;
   }
   if (newPassword.length < 8) {
-    res.status(400).json({ success: false, error: "New password must be at least 8 characters." });
+    res.status(400).json({ success: false, error: "New password must be at least 8 characters.", code: "NEW_PASSWORD_MUST_BE_AT_LEAST" });
     return;
   }
 
   const user = await prisma.user.findUnique({ where: { id: req.user!.id } });
   if (!user) {
-    res.status(404).json({ success: false, error: "User not found." });
+    res.status(404).json({ success: false, error: "User not found.", code: "USER_NOT_FOUND" });
     return;
   }
 
@@ -250,13 +388,13 @@ router.post("/reset-password", authenticate as any, async (req: AuthRequest, res
   if (user.employee_id) {
     await prisma.user.updateMany({
       where: { employee_id: { equals: user.employee_id, mode: "insensitive" } },
-      data: { passwordHash: hash, mustResetPassword: false, passwordChangedAt: new Date() },
+      data: { passwordHash: hash, mustResetPassword: false, passwordChangedAt: new Date(), resetAttempts: 0 },
     });
   } else {
     // Fallback: no employee_id, update just this row
     await prisma.user.update({
       where: { id: user.id },
-      data: { passwordHash: hash, mustResetPassword: false, passwordChangedAt: new Date() },
+      data: { passwordHash: hash, mustResetPassword: false, passwordChangedAt: new Date(), resetAttempts: 0 },
     });
   }
 
@@ -273,11 +411,11 @@ router.post("/set-password", authenticate as any, requireAdmin as any, async (re
   const { employeeId, userId, password } = req.body;
 
   if ((!employeeId && !userId) || !password) {
-    res.status(400).json({ success: false, error: "employeeId (or userId) and password are required." });
+    res.status(400).json({ success: false, error: "employeeId (or userId) and password are required.", code: "EMPLOYEEID_OR_USERID_AND_PASSW" });
     return;
   }
   if (password.length < 6) {
-    res.status(400).json({ success: false, error: "Password must be at least 6 characters." });
+    res.status(400).json({ success: false, error: "Password must be at least 6 characters.", code: "PASSWORD_MUST_BE_AT_LEAST_6_CH" });
     return;
   }
 
@@ -289,20 +427,20 @@ router.post("/set-password", authenticate as any, requireAdmin as any, async (re
     // Update ALL rows matching this employee_id (handles multi-role users)
     const result = await prisma.user.updateMany({
       where: { employee_id: { equals: employeeId.trim(), mode: "insensitive" } },
-      data: { passwordHash: hash, mustResetPassword: true, passwordChangedAt: new Date() },
+      data: { passwordHash: hash, mustResetPassword: true, passwordChangedAt: new Date(), resetAttempts: 0, lock_flag: false },
     });
     updatedCount = result.count;
   } else {
     // Fallback: single row by numeric userId
     await prisma.user.update({
       where: { id: Number(userId) },
-      data: { passwordHash: hash, mustResetPassword: true, passwordChangedAt: new Date() },
+      data: { passwordHash: hash, mustResetPassword: true, passwordChangedAt: new Date(), resetAttempts: 0, lock_flag: false },
     });
     updatedCount = 1;
   }
 
   if (updatedCount === 0) {
-    res.status(404).json({ success: false, error: "No user found with that Employee ID." });
+    res.status(404).json({ success: false, error: "No user found with that Employee ID.", code: "NO_USER_FOUND_WITH_THAT_EMPLOY" });
     return;
   }
 
@@ -371,7 +509,7 @@ router.get("/devices", authenticate as any, requireAdmin as any, async (_req: Au
 router.patch("/devices/:id", authenticate as any, requireAdmin as any, async (req: AuthRequest, res: Response) => {
   const { status } = req.body; // "Approved" | "Rejected"
   if (!["Approved", "Rejected"].includes(status)) {
-    res.status(400).json({ success: false, error: "status must be 'Approved' or 'Rejected'." });
+    res.status(400).json({ success: false, error: "status must be 'Approved' or 'Rejected'.", code: "STATUS_MUST_BE_APPROVED_OR_REJ" });
     return;
   }
 
@@ -410,7 +548,7 @@ router.patch("/devices/:id", authenticate as any, requireAdmin as any, async (re
 
 // Legacy email-based OTP (kept for backward compatibility if needed)
 router.post("/send-otp", async (req: Request, res: Response) => {
-  res.status(410).json({ success: false, error: "This endpoint is deprecated. Use POST /auth/login instead." });
+  res.status(410).json({ success: false, error: "This endpoint is deprecated. Use POST /auth/login instead.", code: "THIS_ENDPOINT_IS_DEPRECATED_US" });
 });
 
 export default router;

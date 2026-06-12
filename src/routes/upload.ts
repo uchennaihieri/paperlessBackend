@@ -15,6 +15,7 @@ router.post("/", (_req: Request, res: Response) => {
     error:
       "Direct file uploads are no longer supported. " +
       "Attach files as part of POST /api/v1/submissions using multipart/form-data.",
+    code: "DEPRECATED_ENDPOINT"
   });
 });
 

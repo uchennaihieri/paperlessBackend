@@ -9,7 +9,7 @@ router.post("/", async (req: Request, res: Response) => {
   const { submissionId, formName, formResponses, submittedById } = req.body;
 
   if (!formName) {
-    res.status(400).json({ success: false, error: "Form name is required" });
+    res.status(400).json({ success: false, error: "Form name is required", code: "FORM_NAME_IS_REQUIRED" });
     return;
   }
 

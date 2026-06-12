@@ -8,7 +8,7 @@ const router = Router();
 router.post("/", async (req: Request, res: Response) => {
   const { email, otp } = req.body;
   if (!email || !otp) {
-    res.status(400).json({ success: false, error: "Email and OTP are required" });
+    res.status(400).json({ success: false, error: "Email and OTP are required", code: "EMAIL_AND_OTP_ARE_REQUIRED" });
     return;
   }
 
@@ -17,7 +17,7 @@ router.post("/", async (req: Request, res: Response) => {
       where: { email, token: otp, expires: { gt: new Date() } },
     });
     if (!record) {
-      res.status(400).json({ success: false, error: "Invalid or expired OTP" });
+      res.status(400).json({ success: false, error: "Invalid or expired OTP", code: "OTP_INVALID" });
       return;
     }
     await prisma.verificationToken.delete({ where: { id: record.id } });
@@ -31,7 +31,7 @@ router.post("/", async (req: Request, res: Response) => {
   });
 
   if (userRoles.length === 0) {
-    res.status(400).json({ success: false, error: "No active account found" });
+    res.status(400).json({ success: false, error: "No active account found", code: "NO_ACTIVE_ACCOUNT_FOUND" });
     return;
   }
 

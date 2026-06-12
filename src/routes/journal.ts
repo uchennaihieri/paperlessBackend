@@ -51,11 +51,11 @@ router.post("/", async (req: AuthRequest, res: Response) => {
   const { sessionRef, formName, type, accountCode, accountName, batchNumber, branch, description, amount, journalId } = req.body;
 
   if (!sessionRef || !formName || !type || !accountCode || !accountName || !description || !amount) {
-    res.status(400).json({ success: false, error: "Missing required fields." });
+    res.status(400).json({ success: false, error: "Missing required fields.", code: "MISSING_REQUIRED_FIELDS" });
     return;
   }
   if (type !== "debit" && type !== "credit") {
-    res.status(400).json({ success: false, error: "type must be 'debit' or 'credit'." });
+    res.status(400).json({ success: false, error: "type must be 'debit' or 'credit'.", code: "TYPE_MUST_BE_DEBIT_OR_CREDIT" });
     return;
   }
 
@@ -66,7 +66,7 @@ router.post("/", async (req: AuthRequest, res: Response) => {
   });
 
   if (!submission) {
-    res.status(404).json({ success: false, error: "Form with this reference not found." });
+    res.status(404).json({ success: false, error: "Form with this reference not found.", code: "FORM_WITH_THIS_REFERENCE_NOT_F" });
     return;
   }
 
@@ -74,14 +74,14 @@ router.post("/", async (req: AuthRequest, res: Response) => {
   const isAssignedTreater = submission.status.startsWith("Assigned") && submission.treaterEmail?.toLowerCase() === req.user?.email?.toLowerCase();
   const isFinalApprover = submission.status === "Awaiting Final Approval";
   if (!isAssignedTreater && !isFinalApprover) {
-    res.status(403).json({ success: false, error: "Only the assigned treater or final approver can perform journal operations." });
+    res.status(403).json({ success: false, error: "Only the assigned treater or final approver can perform journal operations.", code: "ONLY_THE_ASSIGNED_TREATER_OR_F" });
     return;
   }
 
   const isAccountant = (req.user?.specialAccess ?? "").toLowerCase().includes("accountant");
 
   if (!isAccountant) {
-    res.status(403).json({ success: false, error: "Only accountants can add journal entries." });
+    res.status(403).json({ success: false, error: "Only accountants can add journal entries.", code: "ONLY_ACCOUNTANTS_CAN_ADD_JOURN" });
     return;
   }
 
@@ -114,13 +114,13 @@ router.post("/", async (req: AuthRequest, res: Response) => {
 router.post("/batch", async (req: AuthRequest, res: Response) => {
   const { drafts } = req.body;
   if (!Array.isArray(drafts) || drafts.length === 0) {
-    res.status(400).json({ success: false, error: "No drafts provided." });
+    res.status(400).json({ success: false, error: "No drafts provided.", code: "NO_DRAFTS_PROVIDED" });
     return;
   }
 
   const isAccountant = (req.user?.specialAccess ?? "").toLowerCase().includes("accountant");
   if (!isAccountant) {
-    res.status(403).json({ success: false, error: "Only accountants can add journal entries." });
+    res.status(403).json({ success: false, error: "Only accountants can add journal entries.", code: "ONLY_ACCOUNTANTS_CAN_ADD_JOURN" });
     return;
   }
 
@@ -347,14 +347,14 @@ router.post("/commit/:reference", async (req: AuthRequest, res: Response) => {
   });
 
   if (!submission) {
-    res.status(404).json({ success: false, error: "Form with this reference not found." });
+    res.status(404).json({ success: false, error: "Form with this reference not found.", code: "FORM_WITH_THIS_REFERENCE_NOT_F" });
     return;
   }
 
   const isAccountant = (req.user?.specialAccess ?? "").toLowerCase().includes("accountant");
 
   if (!isAccountant) {
-    res.status(403).json({ success: false, error: "Only accountants can commit journal entries." });
+    res.status(403).json({ success: false, error: "Only accountants can commit journal entries.", code: "ONLY_ACCOUNTANTS_CAN_COMMIT_JO" });
     return;
   }
 
@@ -371,7 +371,7 @@ router.post("/commit/:reference", async (req: AuthRequest, res: Response) => {
 
   if (!debits.equals(credits) || debits.isZero()) {
     const scope = linkedRefs.length > 0 ? `batch (${[ref, ...linkedRefs].join(" + ")})` : "session";
-    res.status(400).json({ success: false, error: `Journal ${scope} is not balanced. Cannot commit.` });
+    res.status(400).json({ success: false, error: `Journal ${scope} is not balanced. Cannot commit.`, code: "JOURNAL_SCOPE_IS_NOT_BALANCED" });
     return;
   }
 
@@ -391,11 +391,11 @@ router.post("/link", async (req: AuthRequest, res: Response) => {
   const { primaryRef, linkedRef } = req.body as { primaryRef: string; linkedRef: string };
 
   if (!primaryRef || !linkedRef) {
-    res.status(400).json({ success: false, error: "primaryRef and linkedRef are required." });
+    res.status(400).json({ success: false, error: "primaryRef and linkedRef are required.", code: "PRIMARYREF_AND_LINKEDREF_ARE_R" });
     return;
   }
   if (primaryRef === linkedRef) {
-    res.status(400).json({ success: false, error: "Cannot link a form to itself." });
+    res.status(400).json({ success: false, error: "Cannot link a form to itself.", code: "CANNOT_LINK_A_FORM_TO_ITSELF" });
     return;
   }
 
@@ -406,11 +406,11 @@ router.post("/link", async (req: AuthRequest, res: Response) => {
     select: { treaterEmail: true },
   });
   if (!primarySub) {
-    res.status(404).json({ success: false, error: `Form ${primaryRef} not found.` });
+    res.status(404).json({ success: false, error: `Form ${primaryRef} not found.`, code: "FORM_PRIMARYREF_NOT_FOUND" });
     return;
   }
   if (!isAccountant) {
-    res.status(403).json({ success: false, error: "Only accountants can initiate a journal link." });
+    res.status(403).json({ success: false, error: "Only accountants can initiate a journal link.", code: "ONLY_ACCOUNTANTS_CAN_INITIATE" });
     return;
   }
 
@@ -420,7 +420,7 @@ router.post("/link", async (req: AuthRequest, res: Response) => {
     select: { treaterEmail: true },
   });
   if (!linkedSub) {
-    res.status(404).json({ success: false, error: `Form ${linkedRef} not found.` });
+    res.status(404).json({ success: false, error: `Form ${linkedRef} not found.`, code: "FORM_LINKEDREF_NOT_FOUND" });
     return;
   }
 
@@ -452,9 +452,9 @@ router.delete("/link/:reference", async (req: AuthRequest, res: Response) => {
     where: { reference: ref },
     select: { treaterEmail: true },
   });
-  if (!sub) { res.status(404).json({ success: false, error: "Form not found." }); return; }
+  if (!sub) { res.status(404).json({ success: false, error: "Form not found.", code: "FORM_NOT_FOUND" }); return; }
   if (!isAccountant) {
-    res.status(403).json({ success: false, error: "Only accountants can unlink this session." });
+    res.status(403).json({ success: false, error: "Only accountants can unlink this session.", code: "ONLY_ACCOUNTANTS_CAN_UNLINK_TH" });
     return;
   }
 
@@ -463,7 +463,7 @@ router.delete("/link/:reference", async (req: AuthRequest, res: Response) => {
     where: { sessionRef: ref, committed: true },
   });
   if (committedCount > 0) {
-    res.status(400).json({ success: false, error: "Cannot unlink a session with committed entries." });
+    res.status(400).json({ success: false, error: "Cannot unlink a session with committed entries.", code: "CANNOT_UNLINK_A_SESSION_WITH_C" });
     return;
   }
 
@@ -480,8 +480,8 @@ router.delete("/link/:reference", async (req: AuthRequest, res: Response) => {
 router.patch("/:id", async (req: AuthRequest, res: Response) => {
   const entry = await prisma.journalEntry.findUnique({ where: { id: req.params.id } });
 
-  if (!entry) { res.status(404).json({ success: false, error: "Entry not found." }); return; }
-  if (entry.committed) { res.status(400).json({ success: false, error: "Cannot edit a committed entry." }); return; }
+  if (!entry) { res.status(404).json({ success: false, error: "Entry not found.", code: "ENTRY_NOT_FOUND" }); return; }
+  if (entry.committed) { res.status(400).json({ success: false, error: "Cannot edit a committed entry.", code: "CANNOT_EDIT_A_COMMITTED_ENTRY" }); return; }
 
   // Verify caller is the assigned treater for this session
   const submission = await prisma.formSubmission.findFirst({
@@ -492,7 +492,7 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
   const isAccountant = (req.user?.specialAccess ?? "").toLowerCase().includes("accountant");
 
   if (!isAccountant) {
-    res.status(403).json({ success: false, error: "Only accountants can edit this entry." });
+    res.status(403).json({ success: false, error: "Only accountants can edit this entry.", code: "ONLY_ACCOUNTANTS_CAN_EDIT_THIS" });
     return;
   }
 
@@ -520,8 +520,8 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
 router.delete("/:id", async (req: AuthRequest, res: Response) => {
   const entry = await prisma.journalEntry.findUnique({ where: { id: req.params.id } });
 
-  if (!entry) { res.status(404).json({ success: false, error: "Entry not found." }); return; }
-  if (entry.committed) { res.status(400).json({ success: false, error: "Cannot delete a committed entry." }); return; }
+  if (!entry) { res.status(404).json({ success: false, error: "Entry not found.", code: "ENTRY_NOT_FOUND" }); return; }
+  if (entry.committed) { res.status(400).json({ success: false, error: "Cannot delete a committed entry.", code: "CANNOT_DELETE_A_COMMITTED_ENTR" }); return; }
 
   const submission = await prisma.formSubmission.findFirst({
     where: { reference: entry.sessionRef },
@@ -531,7 +531,7 @@ router.delete("/:id", async (req: AuthRequest, res: Response) => {
   const isAccountant = (req.user?.specialAccess ?? "").toLowerCase().includes("accountant");
 
   if (!isAccountant) {
-    res.status(403).json({ success: false, error: "Only accountants can delete this entry." });
+    res.status(403).json({ success: false, error: "Only accountants can delete this entry.", code: "ONLY_ACCOUNTANTS_CAN_DELETE_TH" });
     return;
   }
 
@@ -550,27 +550,27 @@ router.post("/upload", memUpload.single("file"), async (req: AuthRequest, res: R
   try {
     const file = req.file;
     if (!file) {
-      res.status(400).json({ success: false, error: "No file uploaded." });
+      res.status(400).json({ success: false, error: "No file uploaded.", code: "NO_FILE_UPLOADED" });
       return;
     }
 
     const { totalDebit, totalCredit } = req.body;
     if (totalDebit === undefined || totalCredit === undefined) {
-      res.status(400).json({ success: false, error: "totalDebit and totalCredit are required." });
+      res.status(400).json({ success: false, error: "totalDebit and totalCredit are required.", code: "TOTALDEBIT_AND_TOTALCREDIT_ARE" });
       return;
     }
 
     const debitVal = parseFloat(totalDebit);
     const creditVal = parseFloat(totalCredit);
     if (isNaN(debitVal) || isNaN(creditVal) || debitVal < 0 || creditVal < 0) {
-      res.status(400).json({ success: false, error: "totalDebit and totalCredit must be valid positive numbers." });
+      res.status(400).json({ success: false, error: "totalDebit and totalCredit must be valid positive numbers.", code: "TOTALDEBIT_AND_TOTALCREDIT_MUS" });
       return;
     }
 
     // Access: accountant only
     const isAccountant = (req.user?.specialAccess ?? "").toLowerCase().includes("accountant");
     if (!isAccountant) {
-      res.status(403).json({ success: false, error: "Only accountants can upload journal files." });
+      res.status(403).json({ success: false, error: "Only accountants can upload journal files.", code: "ONLY_ACCOUNTANTS_CAN_UPLOAD_JO" });
       return;
     }
 
@@ -652,7 +652,7 @@ router.post("/upload", memUpload.single("file"), async (req: AuthRequest, res: R
     res.status(201).json({ success: true, data: uploaded, entries: createdEntries });
   } catch (err: any) {
     console.error("Error uploading journal:", err);
-    res.status(500).json({ success: false, error: err.message || "Failed to upload journal." });
+    res.status(500).json({ success: false, error: err.message || "Failed to upload journal.", code: "INTERNALSERVERERROR" });
   }
 });
 
@@ -667,7 +667,7 @@ router.get("/uploads", async (req: AuthRequest, res: Response) => {
     res.json({ success: true, data: uploads });
   } catch (err: any) {
     console.error("Error fetching uploaded journals:", err);
-    res.status(500).json({ success: false, error: "Failed to fetch uploaded journals." });
+    res.status(500).json({ success: false, error: "Failed to fetch uploaded journals.", code: "FAILED_TO_FETCH_UPLOADED_JOURN" });
   }
 });
 
@@ -677,12 +677,12 @@ router.get("/uploads/content/:id", async (req: AuthRequest, res: Response) => {
   try {
     const upload = await prisma.uploadedJournal.findUnique({ where: { id: req.params.id } });
     if (!upload) {
-      res.status(404).json({ success: false, error: "Uploaded journal not found." });
+      res.status(404).json({ success: false, error: "Uploaded journal not found.", code: "UPLOADED_JOURNAL_NOT_FOUND" });
       return;
     }
 
     if (!isSharePointEnabled()) {
-      res.status(501).json({ success: false, error: "SharePoint is not configured." });
+      res.status(501).json({ success: false, error: "SharePoint is not configured.", code: "SHAREPOINT_IS_NOT_CONFIGURED" });
       return;
     }
 
@@ -706,7 +706,7 @@ router.get("/uploads/content/:id", async (req: AuthRequest, res: Response) => {
     });
   } catch (err: any) {
     console.error("Error fetching uploaded journal content:", err);
-    res.status(500).json({ success: false, error: err.message || "Failed to fetch journal content." });
+    res.status(500).json({ success: false, error: err.message || "Failed to fetch journal content.", code: "INTERNALSERVERERROR" });
   }
 });
 
@@ -718,14 +718,14 @@ router.patch("/uploads/:id/link", async (req: AuthRequest, res: Response) => {
     const { sessionRef } = req.body;
     const upload = await prisma.uploadedJournal.findUnique({ where: { id: req.params.id } });
     if (!upload) {
-      res.status(404).json({ success: false, error: "Uploaded journal not found." });
+      res.status(404).json({ success: false, error: "Uploaded journal not found.", code: "UPLOADED_JOURNAL_NOT_FOUND" });
       return;
     }
 
     // Access: accountant only
     const isAccountant = (req.user?.specialAccess ?? "").toLowerCase().includes("accountant");
     if (!isAccountant) {
-      res.status(403).json({ success: false, error: "Only accountants can link journal uploads." });
+      res.status(403).json({ success: false, error: "Only accountants can link journal uploads.", code: "ONLY_ACCOUNTANTS_CAN_LINK_JOUR" });
       return;
     }
 
@@ -736,14 +736,14 @@ router.patch("/uploads/:id/link", async (req: AuthRequest, res: Response) => {
         select: { treaterEmail: true, status: true },
       });
       if (!submission) {
-        res.status(404).json({ success: false, error: `Form ${sessionRef} not found.` });
+        res.status(404).json({ success: false, error: `Form ${sessionRef} not found.`, code: "FORM_SESSIONREF_NOT_FOUND" });
         return;
       }
       const isAssignedTreater = submission.status.startsWith("Assigned") &&
         submission.treaterEmail?.toLowerCase() === req.user?.email?.toLowerCase();
       const isFinalApprover = submission.status === "Awaiting Final Approval";
       if (!isAssignedTreater && !isFinalApprover) {
-        res.status(403).json({ success: false, error: "Only the assigned treater can link a journal." });
+        res.status(403).json({ success: false, error: "Only the assigned treater can link a journal.", code: "ONLY_THE_ASSIGNED_TREATER_CAN" });
         return;
       }
 
@@ -762,7 +762,7 @@ router.patch("/uploads/:id/link", async (req: AuthRequest, res: Response) => {
     res.json({ success: true, data: updated });
   } catch (err: any) {
     console.error("Error linking journal upload:", err);
-    res.status(500).json({ success: false, error: err.message || "Failed to link journal." });
+    res.status(500).json({ success: false, error: err.message || "Failed to link journal.", code: "INTERNALSERVERERROR" });
   }
 });
 
@@ -776,7 +776,7 @@ router.get("/uploads/linked/:sessionRef", async (req: AuthRequest, res: Response
     res.json({ success: true, data: upload });
   } catch (err: any) {
     console.error("Error fetching linked journal:", err);
-    res.status(500).json({ success: false, error: "Failed to fetch linked journal." });
+    res.status(500).json({ success: false, error: "Failed to fetch linked journal.", code: "FAILED_TO_FETCH_LINKED_JOURNAL" });
   }
 });
 
@@ -786,14 +786,14 @@ router.delete("/uploads/:id", async (req: AuthRequest, res: Response) => {
   try {
     const upload = await prisma.uploadedJournal.findUnique({ where: { id: req.params.id } });
     if (!upload) {
-      res.status(404).json({ success: false, error: "Uploaded journal not found." });
+      res.status(404).json({ success: false, error: "Uploaded journal not found.", code: "UPLOADED_JOURNAL_NOT_FOUND" });
       return;
     }
 
     // Access: accountant only
     const isAccountant = (req.user?.specialAccess ?? "").toLowerCase().includes("accountant");
     if (!isAccountant) {
-      res.status(403).json({ success: false, error: "Only accountants can delete uploaded journals." });
+      res.status(403).json({ success: false, error: "Only accountants can delete uploaded journals.", code: "ONLY_ACCOUNTANTS_CAN_DELETE_UP" });
       return;
     }
 
@@ -806,7 +806,7 @@ router.delete("/uploads/:id", async (req: AuthRequest, res: Response) => {
     res.json({ success: true });
   } catch (err: any) {
     console.error("Error deleting uploaded journal:", err);
-    res.status(500).json({ success: false, error: err.message || "Failed to delete uploaded journal." });
+    res.status(500).json({ success: false, error: err.message || "Failed to delete uploaded journal.", code: "INTERNALSERVERERROR" });
   }
 });
 

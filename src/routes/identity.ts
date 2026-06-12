@@ -112,7 +112,7 @@ router.get("/lookup/:idType/:idNumber", async (req: AuthRequest, res: Response) 
     res.json({ success: true, data: log || null });
   } catch (error: any) {
     logger.error("Error in identity lookup:", error);
-    res.status(500).json({ success: false, error: "Failed to lookup history" });
+    res.status(500).json({ success: false, error: "Failed to lookup history", code: "FAILED_TO_LOOKUP_HISTORY" });
   }
 });
 
@@ -122,7 +122,7 @@ router.post("/bvn/:idNumber", async (req: AuthRequest, res: Response) => {
   const { firstname, lastname, dob, phone, email, gender, submissionId, forceNew, cloneFromReference } = req.body;
 
   if (!firstname || !lastname) {
-    res.status(400).json({ success: false, error: "firstname and lastname are required" });
+    res.status(400).json({ success: false, error: "firstname and lastname are required", code: "FIRSTNAME_AND_LASTNAME_ARE_REQ" });
     return;
   }
 
@@ -136,7 +136,7 @@ router.post("/bvn/:idNumber", async (req: AuthRequest, res: Response) => {
         where: { reference: cloneFromReference }
       });
       if (!sourceLog) {
-        res.status(404).json({ success: false, error: "Source check log not found" });
+        res.status(404).json({ success: false, error: "Source check log not found", code: "SOURCE_CHECK_LOG_NOT_FOUND" });
         return;
       }
       const reference = await generateReference("BVN");
@@ -339,7 +339,7 @@ router.post("/nin/:idNumber", async (req: AuthRequest, res: Response) => {
   const { firstname, lastname, middlename, dob, phone, email, gender, submissionId, forceNew, cloneFromReference } = req.body;
 
   if (!firstname || !lastname) {
-    res.status(400).json({ success: false, error: "firstname and lastname are required" });
+    res.status(400).json({ success: false, error: "firstname and lastname are required", code: "FIRSTNAME_AND_LASTNAME_ARE_REQ" });
     return;
   }
 
@@ -353,7 +353,7 @@ router.post("/nin/:idNumber", async (req: AuthRequest, res: Response) => {
         where: { reference: cloneFromReference }
       });
       if (!sourceLog) {
-        res.status(404).json({ success: false, error: "Source check log not found" });
+        res.status(404).json({ success: false, error: "Source check log not found", code: "SOURCE_CHECK_LOG_NOT_FOUND" });
         return;
       }
       const reference = await generateReference("NIN");
@@ -561,12 +561,12 @@ router.get("/pdf/:reference", async (req: AuthRequest, res: Response) => {
   });
 
   if (!log) {
-    res.status(404).json({ success: false, error: "Check not found." });
+    res.status(404).json({ success: false, error: "Check not found.", code: "CHECK_NOT_FOUND" });
     return;
   }
 
   if (!log.pdfPath) {
-    res.status(202).json({ success: false, error: "PDF is still being generated. Please try again in a few seconds." });
+    res.status(202).json({ success: false, error: "PDF is still being generated. Please try again in a few seconds.", code: "PDF_IS_STILL_BEING_GENERATED_P" });
     return;
   }
 
@@ -587,7 +587,7 @@ router.get("/pdf/:reference", async (req: AuthRequest, res: Response) => {
     res.send(pdfBuffer);
   } catch (err: any) {
     logger.error("Failed to serve identity PDF:", err);
-    res.status(500).json({ success: false, error: "Failed to retrieve PDF." });
+    res.status(500).json({ success: false, error: "Failed to retrieve PDF.", code: "FAILED_TO_RETRIEVE_PDF" });
   }
 });
 

@@ -24,13 +24,13 @@ router.get("/external/:token", async (req: Request, res: Response) => {
     });
 
     if (!contract) {
-      res.status(404).json({ success: false, error: "Contract not found, invalid token, or already signed." });
+      res.status(404).json({ success: false, error: "Contract not found, invalid token, or already signed.", code: "CONTRACT_NOT_FOUND_INVALID_TOK" });
       return;
     }
 
     const html = await getContractPreviewHtml(contract.id);
     if (!html) {
-      res.status(500).json({ success: false, error: "Failed to generate contract preview." });
+      res.status(500).json({ success: false, error: "Failed to generate contract preview.", code: "FAILED_TO_GENERATE_CONTRACT_PR" });
       return;
     }
 
@@ -46,7 +46,7 @@ router.get("/external/:token", async (req: Request, res: Response) => {
     });
   } catch (error: any) {
     console.error("Failed to fetch external contract:", error);
-    res.status(500).json({ success: false, error: "An error occurred." });
+    res.status(500).json({ success: false, error: "An error occurred.", code: "AN_ERROR_OCCURRED" });
   }
 });
 
@@ -55,7 +55,7 @@ router.get("/external/:token", async (req: Request, res: Response) => {
 router.post("/external-sign/:token", async (req: Request, res: Response) => {
   const { drawnSignatureBase64 } = req.body;
   if (!drawnSignatureBase64) {
-    res.status(400).json({ success: false, error: "Signature is required." });
+    res.status(400).json({ success: false, error: "Signature is required.", code: "SIGNATURE_IS_REQUIRED" });
     return;
   }
 
@@ -70,14 +70,14 @@ router.post("/external-sign/:token", async (req: Request, res: Response) => {
     });
 
     if (!contract) {
-      res.status(404).json({ success: false, error: "Contract not found or already signed." });
+      res.status(404).json({ success: false, error: "Contract not found or already signed.", code: "CONTRACT_NOT_FOUND_OR_ALREADY" });
       return;
     }
 
     // Generate Contract PDF with new base64 parameters. Selfie is blank for external signers.
     const pdfResult = await generateContractPdf(contract.id, drawnSignatureBase64, "");
     if (!pdfResult) {
-      res.status(500).json({ success: false, error: "Failed to generate contract PDF." });
+      res.status(500).json({ success: false, error: "Failed to generate contract PDF.", code: "FAILED_TO_GENERATE_CONTRACT_PD" });
       return;
     }
 
@@ -158,7 +158,7 @@ router.post("/external-sign/:token", async (req: Request, res: Response) => {
     res.json({ success: true, message: "Contract signed successfully." });
   } catch (error: any) {
     console.error("Failed to sign contract:", error);
-    res.status(500).json({ success: false, error: "An error occurred while signing the contract." });
+    res.status(500).json({ success: false, error: "An error occurred while signing the contract.", code: "AN_ERROR_OCCURRED_WHILE_SIGNIN" });
   }
 });
 
@@ -169,7 +169,7 @@ router.use(authenticate as any);
 router.get("/pending", async (req: AuthRequest, res: Response) => {
   const email = req.user?.email;
   if (!email) {
-    res.status(401).json({ success: false, error: "Not logged in" });
+    res.status(401).json({ success: false, error: "Not logged in", code: "NOT_LOGGED_IN" });
     return;
   }
 
@@ -194,7 +194,7 @@ router.get("/pending", async (req: AuthRequest, res: Response) => {
     res.json({ success: true, contracts });
   } catch (error: any) {
     console.error("Failed to fetch pending contracts:", error);
-    res.status(500).json({ success: false, error: "Failed to fetch pending contracts." });
+    res.status(500).json({ success: false, error: "Failed to fetch pending contracts.", code: "FAILED_TO_FETCH_PENDING_CONTRA" });
   }
 });
 
@@ -203,7 +203,7 @@ router.get("/pending", async (req: AuthRequest, res: Response) => {
 router.get("/:id/preview", async (req: AuthRequest, res: Response) => {
   const email = req.user?.email;
   if (!email) {
-    res.status(401).json({ success: false, error: "Not logged in" });
+    res.status(401).json({ success: false, error: "Not logged in", code: "NOT_LOGGED_IN" });
     return;
   }
 
@@ -213,25 +213,25 @@ router.get("/:id/preview", async (req: AuthRequest, res: Response) => {
     });
 
     if (!contract) {
-      res.status(404).json({ success: false, error: "Contract not found." });
+      res.status(404).json({ success: false, error: "Contract not found.", code: "CONTRACT_NOT_FOUND" });
       return;
     }
 
     if (contract.submitterEmail.toLowerCase() !== email.toLowerCase()) {
-      res.status(403).json({ success: false, error: "Not authorized to view this contract." });
+      res.status(403).json({ success: false, error: "Not authorized to view this contract.", code: "NOT_AUTHORIZED_TO_VIEW_THIS_CO" });
       return;
     }
 
     const html = await getContractPreviewHtml(contract.id);
     if (!html) {
-      res.status(500).json({ success: false, error: "Failed to generate contract preview." });
+      res.status(500).json({ success: false, error: "Failed to generate contract preview.", code: "FAILED_TO_GENERATE_CONTRACT_PR" });
       return;
     }
 
     res.json({ success: true, html });
   } catch (error: any) {
     console.error("Failed to generate preview:", error);
-    res.status(500).json({ success: false, error: "An error occurred while generating the preview." });
+    res.status(500).json({ success: false, error: "An error occurred while generating the preview.", code: "AN_ERROR_OCCURRED_WHILE_GENERA" });
   }
 });
 
@@ -240,13 +240,13 @@ router.get("/:id/preview", async (req: AuthRequest, res: Response) => {
 router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
   const email = req.user?.email;
   if (!email) {
-    res.status(401).json({ success: false, error: "Not logged in" });
+    res.status(401).json({ success: false, error: "Not logged in", code: "NOT_LOGGED_IN" });
     return;
   }
 
   const { token } = req.body;
   if (!token) {
-    res.status(400).json({ success: false, error: "Security token is required." });
+    res.status(400).json({ success: false, error: "Security token is required.", code: "SECURITY_TOKEN_IS_REQUIRED" });
     return;
   }
 
@@ -261,12 +261,12 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
     });
 
     if (!contract || contract.status !== "Pending") {
-      res.status(400).json({ success: false, error: "Contract not found or already signed." });
+      res.status(400).json({ success: false, error: "Contract not found or already signed.", code: "CONTRACT_NOT_FOUND_OR_ALREADY" });
       return;
     }
 
     if (contract.submitterEmail.toLowerCase() !== email.toLowerCase()) {
-      res.status(403).json({ success: false, error: "Not authorized to sign this contract." });
+      res.status(403).json({ success: false, error: "Not authorized to sign this contract.", code: "NOT_AUTHORIZED_TO_SIGN_THIS_CO" });
       return;
     }
 
@@ -275,7 +275,7 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
     });
 
     if (!user) {
-      res.status(400).json({ success: false, error: "User not found." });
+      res.status(400).json({ success: false, error: "User not found.", code: "USER_NOT_FOUND" });
       return;
     }
 
@@ -283,12 +283,12 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
     const hashedInput = hashToken(token);
 
     if (!secData || secData.hashedToken !== hashedInput) {
-      res.status(400).json({ success: false, error: "Invalid security token." });
+      res.status(400).json({ success: false, error: "Invalid security token.", code: "INVALID_SECURITY_TOKEN" });
       return;
     }
 
     if (!secData.encryptedSignature) {
-      res.status(400).json({ success: false, error: "You must set up your signature in settings first." });
+      res.status(400).json({ success: false, error: "You must set up your signature in settings first.", code: "YOU_MUST_SET_UP_YOUR_SIGNATURE" });
       return;
     }
 
@@ -297,7 +297,7 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
     // Generate Contract PDF with user's saved signature (no selfie needed for internal token auth)
     const pdfResult = await generateContractPdf(contract.id, signatureBase64, "", user.user_role || "");
     if (!pdfResult) {
-      res.status(500).json({ success: false, error: "Failed to generate contract PDF." });
+      res.status(500).json({ success: false, error: "Failed to generate contract PDF.", code: "FAILED_TO_GENERATE_CONTRACT_PD" });
       return;
     }
 
@@ -356,7 +356,7 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
     res.json({ success: true, message: "Contract signed successfully." });
   } catch (error: any) {
     console.error("Failed to sign contract:", error);
-    res.status(500).json({ success: false, error: "An error occurred while signing the contract." });
+    res.status(500).json({ success: false, error: "An error occurred while signing the contract.", code: "AN_ERROR_OCCURRED_WHILE_SIGNIN" });
   }
 });
 
@@ -364,13 +364,13 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
 router.post("/:id/send-external", async (req: AuthRequest, res: Response) => {
   const email = req.user?.email;
   if (!email) {
-    res.status(401).json({ success: false, error: "Not logged in" });
+    res.status(401).json({ success: false, error: "Not logged in", code: "NOT_LOGGED_IN" });
     return;
   }
 
   const { externalSignerName, externalSignerEmail } = req.body;
   if (!externalSignerName || !externalSignerEmail) {
-    res.status(400).json({ success: false, error: "Signer name and email are required." });
+    res.status(400).json({ success: false, error: "Signer name and email are required.", code: "SIGNER_NAME_AND_EMAIL_ARE_REQU" });
     return;
   }
 
@@ -383,7 +383,7 @@ router.post("/:id/send-external", async (req: AuthRequest, res: Response) => {
     });
 
     if (!contract || contract.status !== "Pending") {
-      res.status(400).json({ success: false, error: "Contract not found or already signed." });
+      res.status(400).json({ success: false, error: "Contract not found or already signed.", code: "CONTRACT_NOT_FOUND_OR_ALREADY" });
       return;
     }
 
@@ -430,7 +430,7 @@ router.post("/:id/send-external", async (req: AuthRequest, res: Response) => {
     res.json({ success: true, message: "External signature request sent successfully." });
   } catch (error: any) {
     console.error("Failed to send external contract:", error);
-    res.status(500).json({ success: false, error: "An error occurred while sending the email." });
+    res.status(500).json({ success: false, error: "An error occurred while sending the email.", code: "AN_ERROR_OCCURRED_WHILE_SENDIN" });
   }
 });
 

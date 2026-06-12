@@ -151,7 +151,7 @@ router.get("/data-dictionary", async (req: Request, res: Response) => {
 router.post("/", async (req: Request, res: Response) => {
   const { name, sharepointPath, type } = req.body;
   if (!name || !sharepointPath) {
-    res.status(400).json({ success: false, error: "name and sharepointPath are required" });
+    res.status(400).json({ success: false, error: "name and sharepointPath are required", code: "NAME_AND_SHAREPOINTPATH_ARE_RE" });
     return;
   }
   const templateType = type === "html" ? "html" : "document";
@@ -162,9 +162,9 @@ router.post("/", async (req: Request, res: Response) => {
     res.status(201).json({ success: true, data: template });
   } catch (err: any) {
     if (err?.code === "P2002") {
-      res.status(409).json({ success: false, error: "Template with this name already exists" });
+      res.status(409).json({ success: false, error: "Template with this name already exists", code: "TEMPLATE_WITH_THIS_NAME_ALREAD" });
     } else {
-      res.status(500).json({ success: false, error: "Internal Server Error" });
+      res.status(500).json({ success: false, error: "Internal Server Error", code: "INTERNAL_SERVER_ERROR" });
     }
   }
 });
@@ -177,7 +177,7 @@ router.get("/:id", async (req: Request, res: Response) => {
     include: { fields: true },
   });
   if (!template) {
-    res.status(404).json({ success: false, error: "Template not found" });
+    res.status(404).json({ success: false, error: "Template not found", code: "TEMPLATE_NOT_FOUND" });
     return;
   }
   res.json({ success: true, data: template });
@@ -190,7 +190,7 @@ router.delete("/:id", async (req: Request, res: Response) => {
     await prisma.pdfTemplate.delete({ where: { id } });
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ success: false, error: "Failed to delete template" });
+    res.status(500).json({ success: false, error: "Failed to delete template", code: "FAILED_TO_DELETE_TEMPLATE" });
   }
 });
 
@@ -201,7 +201,7 @@ router.get("/:id/file", async (req: Request, res: Response) => {
   const { id } = req.params;
   const template = await prisma.pdfTemplate.findUnique({ where: { id } });
   if (!template) {
-    res.status(404).json({ success: false, error: "Template not found" });
+    res.status(404).json({ success: false, error: "Template not found", code: "TEMPLATE_NOT_FOUND" });
     return;
   }
 
@@ -220,7 +220,7 @@ router.get("/:id/file", async (req: Request, res: Response) => {
     }
     res.send(buffer);
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: err.message, code: "INTERNALSERVERERROR" });
   }
 });
 
@@ -257,7 +257,7 @@ router.post("/:id/fields", async (req: Request, res: Response) => {
     });
     res.status(201).json({ success: true, data: field });
   } catch (err) {
-    res.status(500).json({ success: false, error: "Failed to create field" });
+    res.status(500).json({ success: false, error: "Failed to create field", code: "FAILED_TO_CREATE_FIELD" });
   }
 });
 
@@ -273,7 +273,7 @@ router.put("/:id/fields/:fid", async (req: Request, res: Response) => {
     });
     res.json({ success: true, data: field });
   } catch (err) {
-    res.status(500).json({ success: false, error: "Failed to update field" });
+    res.status(500).json({ success: false, error: "Failed to update field", code: "FAILED_TO_UPDATE_FIELD" });
   }
 });
 
@@ -284,7 +284,7 @@ router.delete("/:id/fields/:fid", async (req: Request, res: Response) => {
     await prisma.pdfTemplateField.delete({ where: { id: fid } });
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ success: false, error: "Failed to delete field" });
+    res.status(500).json({ success: false, error: "Failed to delete field", code: "FAILED_TO_DELETE_FIELD" });
   }
 });
 
@@ -312,12 +312,12 @@ router.get("/:id/extract-placeholders", async (req: Request, res: Response) => {
   });
 
   if (!template) {
-    res.status(404).json({ success: false, error: "Template not found" });
+    res.status(404).json({ success: false, error: "Template not found", code: "TEMPLATE_NOT_FOUND" });
     return;
   }
 
   if ((template as any).type !== "html") {
-    res.status(400).json({ success: false, error: "Only HTML templates support placeholder extraction" });
+    res.status(400).json({ success: false, error: "Only HTML templates support placeholder extraction", code: "ONLY_HTML_TEMPLATES_SUPPORT_PL" });
     return;
   }
 
@@ -372,7 +372,7 @@ router.get("/:id/extract-placeholders", async (req: Request, res: Response) => {
       },
     });
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message ?? "Failed to extract placeholders" });
+    res.status(500).json({ success: false, error: err.message ?? "Failed to extract placeholders", code: "INTERNALSERVERERROR" });
   }
 });
 
@@ -384,7 +384,7 @@ router.post("/:id/sync-fields", async (req: Request, res: Response) => {
   const { fields } = req.body as { fields: { name: string; mappingPath: string | null; type: string }[] };
 
   if (!Array.isArray(fields)) {
-    res.status(400).json({ success: false, error: "fields array required" });
+    res.status(400).json({ success: false, error: "fields array required", code: "FIELDS_ARRAY_REQUIRED" });
     return;
   }
 
@@ -402,7 +402,7 @@ router.post("/:id/sync-fields", async (req: Request, res: Response) => {
     });
     res.json({ success: true, count: created.count });
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: err.message, code: "INTERNALSERVERERROR" });
   }
 });
 
@@ -417,11 +417,11 @@ router.get("/:id/generate-test-pdf", async (req: Request, res: Response) => {
     });
 
     if (!template) {
-      res.status(404).json({ success: false, error: "Template not found" });
+      res.status(404).json({ success: false, error: "Template not found", code: "TEMPLATE_NOT_FOUND" });
       return;
     }
     if ((template as any).type !== "html") {
-      res.status(400).json({ success: false, error: "Only HTML templates support test PDF generation" });
+      res.status(400).json({ success: false, error: "Only HTML templates support test PDF generation", code: "ONLY_HTML_TEMPLATES_SUPPORT_TE" });
       return;
     }
 
@@ -431,7 +431,7 @@ router.get("/:id/generate-test-pdf", async (req: Request, res: Response) => {
       const { buffer } = await downloadFromSharePoint(template.sharepointPath);
       htmlSource = buffer.toString("utf-8");
     } catch (e: any) {
-      res.status(502).json({ success: false, error: `Could not download HTML from SharePoint: ${e.message}` });
+      res.status(502).json({ success: false, error: `Could not download HTML from SharePoint: ${e.message}`, code: "COULD_NOT_DOWNLOAD_HTML_FROM_S" });
       return;
     }
 
@@ -500,7 +500,7 @@ router.get("/:id/generate-test-pdf", async (req: Request, res: Response) => {
     try {
       rendered = Handlebars.compile(htmlSource)(ctx);
     } catch (e: any) {
-      res.status(422).json({ success: false, error: `Handlebars compile error: ${e.message}` });
+      res.status(422).json({ success: false, error: `Handlebars compile error: ${e.message}`, code: "HANDLEBARS_COMPILE_ERROR_EMESS" });
       return;
     }
 
@@ -522,12 +522,12 @@ router.get("/:id/generate-test-pdf", async (req: Request, res: Response) => {
       res.send(Buffer.from(pdfBuffer));
 
     } catch (e: any) {
-      res.status(500).json({ success: false, error: `PDF render failed: ${e.message}` });
+      res.status(500).json({ success: false, error: `PDF render failed: ${e.message}`, code: "PDF_RENDER_FAILED_EMESSAGE" });
     }
 
   } catch (e: any) {
     console.error("[generate-test-pdf]", e);
-    res.status(500).json({ success: false, error: `Unexpected error: ${e.message}` });
+    res.status(500).json({ success: false, error: `Unexpected error: ${e.message}`, code: "UNEXPECTED_ERROR_EMESSAGE" });
   }
 });
 

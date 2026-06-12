@@ -19,7 +19,7 @@ router.use(authenticate as any);
 router.post("/generate", async (req: Request, res: Response) => {
   const { templateId, data } = req.body;
   if (!templateId || !data) {
-    res.status(400).json({ success: false, error: "templateId and data are required" });
+    res.status(400).json({ success: false, error: "templateId and data are required", code: "TEMPLATEID_AND_DATA_ARE_REQUIR" });
     return;
   }
 
@@ -30,7 +30,7 @@ router.post("/generate", async (req: Request, res: Response) => {
     });
 
     if (!template) {
-      res.status(404).json({ success: false, error: "Template not found" });
+      res.status(404).json({ success: false, error: "Template not found", code: "TEMPLATE_NOT_FOUND" });
       return;
     }
 
@@ -165,7 +165,7 @@ router.post("/generate", async (req: Request, res: Response) => {
 
   } catch (err: any) {
     console.error("PDF Generate Error:", err);
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: err.message, code: "INTERNALSERVERERROR" });
   }
 });
 

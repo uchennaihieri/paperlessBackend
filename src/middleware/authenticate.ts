@@ -26,7 +26,7 @@ export async function authenticate(
 ): Promise<void> {
   const header = req.headers.authorization;
   if (!header?.startsWith("Bearer ")) {
-    res.status(401).json({ success: false, error: "Missing or invalid Authorization header" });
+    res.status(401).json({ success: false, error: "Missing or invalid Authorization header", code: "MISSING_OR_INVALID_AUTHORIZATI" });
     return;
   }
 
@@ -59,7 +59,7 @@ export async function authenticate(
     req.user = payload;
     next();
   } catch {
-    res.status(401).json({ success: false, error: "Invalid or expired token" });
+    res.status(401).json({ success: false, error: "Invalid or expired token", code: "INVALID_OR_EXPIRED_TOKEN" });
   }
 }
 
@@ -76,7 +76,7 @@ export function requireAdmin(
   const isSpecialAdmin = req.user?.specialAccess?.toLowerCase().includes("administrator");
 
   if (!isRoleAdmin && !isSpecialAdmin) {
-    res.status(403).json({ success: false, error: "Forbidden: Administrators only" });
+    res.status(403).json({ success: false, error: "Forbidden: Administrators only", code: "FORBIDDEN_ADMINISTRATORS_ONLY" });
     return;
   }
   next();

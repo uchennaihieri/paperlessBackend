@@ -199,7 +199,7 @@ router.get("/lookup/:bvn", async (req: AuthRequest, res: Response) => {
     res.json({ success: true, data: log || null });
   } catch (error: any) {
     logger.error("Error in CRB lookup:", error);
-    res.status(500).json({ success: false, error: "Failed to lookup history" });
+    res.status(500).json({ success: false, error: "Failed to lookup history", code: "FAILED_TO_LOOKUP_HISTORY" });
   }
 });
 
@@ -208,11 +208,11 @@ router.post("/consumer/bvn", async (req: AuthRequest, res: Response) => {
   const { bvn, enquiryReason = "Credit Check", productId = 45, cloneFromReference } = req.body;
 
   if (!bvn || !/^\d{11}$/.test(String(bvn).trim())) {
-    res.status(400).json({ success: false, error: "A valid 11-digit BVN is required." });
+    res.status(400).json({ success: false, error: "A valid 11-digit BVN is required.", code: "A_VALID_11DIGIT_BVN_IS_REQUIRE" });
     return;
   }
   if (productId !== undefined && isNaN(Number(productId))) {
-    res.status(400).json({ success: false, error: "productId must be a number." });
+    res.status(400).json({ success: false, error: "productId must be a number.", code: "PRODUCTID_MUST_BE_A_NUMBER" });
     return;
   }
 
@@ -225,7 +225,7 @@ router.post("/consumer/bvn", async (req: AuthRequest, res: Response) => {
         where: { reference: cloneFromReference }
       });
       if (!sourceLog) {
-        res.status(404).json({ success: false, error: "Source check log not found" });
+        res.status(404).json({ success: false, error: "Source check log not found", code: "SOURCE_CHECK_LOG_NOT_FOUND" });
         return;
       }
       const reference = await generateRef("FCB");
@@ -285,7 +285,7 @@ router.post("/consumer/bvn", async (req: AuthRequest, res: Response) => {
       return;
     } catch (err: any) {
       logger.error("Cloning CRB check failed:", err);
-      res.status(500).json({ success: false, error: "Failed to clone CRB record." });
+      res.status(500).json({ success: false, error: "Failed to clone CRB record.", code: "FAILED_TO_CLONE_CRB_RECORD" });
       return;
     }
   }
@@ -365,8 +365,8 @@ router.get("/pdf/:reference", async (req: AuthRequest, res: Response) => {
   const log = await prisma.creditBureauLog.findUnique({
     where: { reference }, select: { pdfPath: true },
   });
-  if (!log) { res.status(404).json({ success: false, error: "Check not found." }); return; }
-  if (!log.pdfPath) { res.status(202).json({ success: false, error: "PDF still generating. Try again shortly." }); return; }
+  if (!log) { res.status(404).json({ success: false, error: "Check not found.", code: "CHECK_NOT_FOUND" }); return; }
+  if (!log.pdfPath) { res.status(202).json({ success: false, error: "PDF still generating. Try again shortly.", code: "PDF_STILL_GENERATING_TRY_AGAIN" }); return; }
 
   try {
     let buf: Buffer;
@@ -377,7 +377,7 @@ router.get("/pdf/:reference", async (req: AuthRequest, res: Response) => {
     res.send(buf);
   } catch (err: any) {
     logger.error("Failed to serve CRB PDF:", err);
-    res.status(500).json({ success: false, error: "Failed to retrieve PDF." });
+    res.status(500).json({ success: false, error: "Failed to retrieve PDF.", code: "FAILED_TO_RETRIEVE_PDF" });
   }
 });
 
@@ -388,12 +388,12 @@ router.post("/consumer/report", async (req: AuthRequest, res: Response) => {
   const { reference, consumerID, enquiryID, subscriberEnquiryEngineID, productId = 45 } = req.body;
 
   if (!reference || !consumerID || !enquiryID || !subscriberEnquiryEngineID) {
-    res.status(400).json({ success: false, error: "reference, consumerID, enquiryID, and subscriberEnquiryEngineID are required." });
+    res.status(400).json({ success: false, error: "reference, consumerID, enquiryID, and subscriberEnquiryEngineID are required.", code: "REFERENCE_CONSUMERID_ENQUIRYID" });
     return;
   }
 
   const log = await prisma.creditBureauLog.findUnique({ where: { reference } });
-  if (!log) { res.status(404).json({ success: false, error: "Check not found." }); return; }
+  if (!log) { res.status(404).json({ success: false, error: "Check not found.", code: "CHECK_NOT_FOUND" }); return; }
 
   let report: any;
   try {
@@ -405,7 +405,7 @@ router.post("/consumer/report", async (req: AuthRequest, res: Response) => {
     });
   } catch (err: any) {
     logger.error("FirstCentral report fetch failed:", err);
-    res.status(502).json({ success: false, error: err.message ?? "Failed to fetch report from FirstCentral." });
+    res.status(502).json({ success: false, error: err.message ?? "Failed to fetch report from FirstCentral.", code: "INTERNALSERVERERROR" });
     return;
   }
 

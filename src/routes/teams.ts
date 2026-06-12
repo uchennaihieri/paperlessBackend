@@ -126,7 +126,7 @@ router.get("/user-by-employee-id/:empId", async (req, res: Response) => {
     orderBy: { id: "desc" }, // take most recently created if duplicates
   });
   if (!user) {
-    res.status(404).json({ success: false, error: "User not found." });
+    res.status(404).json({ success: false, error: "User not found.", code: "USER_NOT_FOUND" });
     return;
   }
   res.json({ success: true, data: user });

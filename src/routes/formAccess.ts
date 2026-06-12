@@ -19,7 +19,7 @@ router.get("/user/:email", requireAdmin as any, async (req: AuthRequest, res: Re
     res.json({ success: true, data: access });
   } catch (err) {
     console.error("Error fetching form access for user:", err);
-    res.status(500).json({ success: false, error: "Failed to fetch access" });
+    res.status(500).json({ success: false, error: "Failed to fetch access", code: "FAILED_TO_FETCH_ACCESS" });
   }
 });
 
@@ -35,7 +35,7 @@ router.get("/form/:templateId", requireAdmin as any, async (req: AuthRequest, re
     res.json({ success: true, data: access });
   } catch (err) {
     console.error("Error fetching form access for template:", err);
-    res.status(500).json({ success: false, error: "Failed to fetch access" });
+    res.status(500).json({ success: false, error: "Failed to fetch access", code: "FAILED_TO_FETCH_ACCESS" });
   }
 });
 
@@ -48,7 +48,7 @@ router.post("/user/:email", requireAdmin as any, async (req: AuthRequest, res: R
   const { templateIds, applyToAll, addedTemplateIds, removedTemplateIds } = req.body;
 
   if (!Array.isArray(templateIds)) {
-    res.status(400).json({ success: false, error: "templateIds must be an array" });
+    res.status(400).json({ success: false, error: "templateIds must be an array", code: "TEMPLATEIDS_MUST_BE_AN_ARRAY" });
     return;
   }
 
@@ -118,7 +118,7 @@ router.post("/user/:email", requireAdmin as any, async (req: AuthRequest, res: R
     res.json({ success: true, message: "Form access updated." });
   } catch (err) {
     console.error("Error updating user form access:", err);
-    res.status(500).json({ success: false, error: "Failed to update access" });
+    res.status(500).json({ success: false, error: "Failed to update access", code: "FAILED_TO_UPDATE_ACCESS" });
   }
 });
 
@@ -130,7 +130,7 @@ router.post("/form/:templateId", requireAdmin as any, async (req: AuthRequest, r
   const { userEmails } = req.body; // Array of email strings
 
   if (!Array.isArray(userEmails)) {
-    res.status(400).json({ success: false, error: "userEmails must be an array" });
+    res.status(400).json({ success: false, error: "userEmails must be an array", code: "USEREMAILS_MUST_BE_AN_ARRAY" });
     return;
   }
 
@@ -156,7 +156,7 @@ router.post("/form/:templateId", requireAdmin as any, async (req: AuthRequest, r
     res.json({ success: true, message: "User access updated for form." });
   } catch (err) {
     console.error("Error updating form access for template:", err);
-    res.status(500).json({ success: false, error: "Failed to update access" });
+    res.status(500).json({ success: false, error: "Failed to update access", code: "FAILED_TO_UPDATE_ACCESS" });
   }
 });
 

@@ -45,7 +45,7 @@ router.get("/", async (_req, res: Response) => {
 // ── GET /api/v1/submissions/my ────────────────────────────────────────────────
 // Submissions made by the authenticated user
 router.get("/my", async (req: AuthRequest, res: Response) => {
-  if (!req.user?.id) { res.status(401).json({ success: false, error: "Unauthenticated" }); return; }
+  if (!req.user?.id) { res.status(401).json({ success: false, error: "Unauthenticated", code: "UNAUTHENTICATED" }); return; }
   const submissions = await prisma.formSubmission.findMany({
     where: {
       submittedById: req.user.id,
@@ -207,7 +207,7 @@ router.get("/filings", async (req: AuthRequest, res: Response) => {
     res.json({ success: true, data: filteredSubmissions });
   } catch (err: any) {
     console.error("Error fetching filings:", err);
-    res.status(500).json({ success: false, error: err.message || "Failed to fetch filings" });
+    res.status(500).json({ success: false, error: err.message || "Failed to fetch filings", code: "INTERNALSERVERERROR" });
   }
 });
 
@@ -224,7 +224,7 @@ router.put("/:id/alias", async (req: AuthRequest, res: Response) => {
     });
 
     if (!submission) {
-      res.status(404).json({ success: false, error: "Submission not found" });
+      res.status(404).json({ success: false, error: "Submission not found", code: "SUBMISSION_NOT_FOUND" });
       return;
     }
 
@@ -234,7 +234,7 @@ router.put("/:id/alias", async (req: AuthRequest, res: Response) => {
 
     // Check if the user is authorized to manage this filing
     if (!userBranch || !formOwner || userBranch.toLowerCase() !== formOwner.toLowerCase()) {
-      res.status(403).json({ success: false, error: "Unauthorized to modify this filing's alias" });
+      res.status(403).json({ success: false, error: "Unauthorized to modify this filing's alias", code: "UNAUTHORIZED_TO_MODIFY_THIS_FI" });
       return;
     }
 
@@ -246,7 +246,7 @@ router.put("/:id/alias", async (req: AuthRequest, res: Response) => {
     res.json({ success: true, data: updated });
   } catch (err: any) {
     console.error("Error updating filing alias:", err);
-    res.status(500).json({ success: false, error: err.message || "Failed to update alias" });
+    res.status(500).json({ success: false, error: err.message || "Failed to update alias", code: "INTERNALSERVERERROR" });
   }
 });
 
@@ -273,7 +273,7 @@ router.get("/prefill-candidates/:templateId", async (req, res: Response) => {
     res.json({ success: true, data: submissions });
   } catch (err: any) {
     console.error("Error fetching prefill candidates:", err);
-    res.status(500).json({ success: false, error: err.message || "Failed to fetch prefill candidates" });
+    res.status(500).json({ success: false, error: err.message || "Failed to fetch prefill candidates", code: "INTERNALSERVERERROR" });
   }
 });
 
@@ -291,7 +291,7 @@ router.get("/by-reference/:ref", async (req, res: Response) => {
     },
   });
   if (!submission) {
-    res.status(404).json({ success: false, error: `No submission found with reference "${req.params.ref}"` });
+    res.status(404).json({ success: false, error: `No submission found with reference "${req.params.ref}"`, code: "NO_SUBMISSION_FOUND_WITH_REFER" });
     return;
   }
   res.json({ success: true, data: submission });
@@ -309,7 +309,7 @@ router.get("/:id", async (req, res: Response) => {
       contractRequests: true,
     },
   });
-  if (!submission) { res.status(404).json({ success: false, error: "Submission not found" }); return; }
+  if (!submission) { res.status(404).json({ success: false, error: "Submission not found", code: "SUBMISSION_NOT_FOUND" }); return; }
   res.json({ success: true, data: submission });
 });
 
@@ -333,7 +333,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
       payload = req.body;
     }
   } catch {
-    res.status(400).json({ success: false, error: "Invalid submission data." });
+    res.status(400).json({ success: false, error: "Invalid submission data.", code: "INVALID_SUBMISSION_DATA" });
     return;
   }
 
@@ -348,7 +348,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
   } = payload;
 
   if (!templateId || !formName) {
-    res.status(400).json({ success: false, error: "templateId and formName are required." });
+    res.status(400).json({ success: false, error: "templateId and formName are required.", code: "TEMPLATEID_AND_FORMNAME_ARE_RE" });
     return;
   }
 
@@ -375,13 +375,13 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
 
   if (initiatorToken) {
     const userEmail = req.user?.email;
-    if (!userEmail) { res.status(401).json({ success: false, error: "Not logged in" }); return; }
+    if (!userEmail) { res.status(401).json({ success: false, error: "Not logged in", code: "NOT_LOGGED_IN" }); return; }
     const hashedInput = hashToken(initiatorToken);
     const secData = await prisma.securityData.findFirst({
       where: { userEmail: { equals: userEmail, mode: "insensitive" } },
     });
     if (!secData || secData.hashedToken !== hashedInput) {
-      res.status(400).json({ success: false, error: "Invalid signature token." });
+      res.status(400).json({ success: false, error: "Invalid signature token.", code: "INVALID_SIGNATURE_TOKEN" });
       return;
     }
     finalSignatureData = decrypt(secData.encryptedSignature);
@@ -418,7 +418,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
     // For a draft, fetch the existing reference so we can use it for folder paths
     const draft = await prisma.formSubmission.findUnique({ where: { id: draftId } });
     if (!draft) {
-      res.status(404).json({ success: false, error: "Draft not found." });
+      res.status(404).json({ success: false, error: "Draft not found.", code: "DRAFT_NOT_FOUND" });
       return;
     }
     reference = draft.reference ?? `REF-${Date.now()}`;
@@ -998,7 +998,7 @@ router.post("/:id/file-attachments", async (req, res: Response) => {
     where: { id: req.params.id },
     include: { template: true },
   });
-  if (!submission) { res.status(404).json({ success: false, error: "Submission not found" }); return; }
+  if (!submission) { res.status(404).json({ success: false, error: "Submission not found", code: "SUBMISSION_NOT_FOUND" }); return; }
 
   const folderPath = path.join(process.cwd(), "filed_attachments", req.params.id);
   await fs.mkdir(folderPath, { recursive: true });
@@ -1017,18 +1017,18 @@ const EDITABLE_STATUSES = ["Submitted", "Rejected"];
 
 router.put("/:id", async (req: AuthRequest, res: Response) => {
   const userId = req.user?.id;
-  if (!userId) { res.status(401).json({ success: false, error: "Unauthenticated" }); return; }
+  if (!userId) { res.status(401).json({ success: false, error: "Unauthenticated", code: "UNAUTHENTICATED" }); return; }
 
   const existing = await prisma.formSubmission.findUnique({
     where: { id: req.params.id },
     include: { signatories: true },
   });
 
-  if (!existing) { res.status(404).json({ success: false, error: "Submission not found" }); return; }
+  if (!existing) { res.status(404).json({ success: false, error: "Submission not found", code: "SUBMISSION_NOT_FOUND" }); return; }
 
   // Ownership check — only the original submitter may edit
   if (existing.submittedById !== userId) {
-    res.status(403).json({ success: false, error: "You do not have permission to edit this submission" });
+    res.status(403).json({ success: false, error: "You do not have permission to edit this submission", code: "YOU_DO_NOT_HAVE_PERMISSION_TO" });
     return;
   }
 
@@ -1044,7 +1044,7 @@ router.put("/:id", async (req: AuthRequest, res: Response) => {
   const { formResponses, signatories, signingType } = req.body;
 
   if (!formResponses) {
-    res.status(400).json({ success: false, error: "formResponses is required" });
+    res.status(400).json({ success: false, error: "formResponses is required", code: "FORMRESPONSES_IS_REQUIRED" });
     return;
   }
 
@@ -1096,17 +1096,17 @@ router.put("/:id", async (req: AuthRequest, res: Response) => {
 // Owner can delete their own form if status is Submitted or Rejected.
 router.delete("/:id", async (req: AuthRequest, res: Response) => {
   const userId = req.user?.id;
-  if (!userId) { res.status(401).json({ success: false, error: "Unauthenticated" }); return; }
+  if (!userId) { res.status(401).json({ success: false, error: "Unauthenticated", code: "UNAUTHENTICATED" }); return; }
 
   const existing = await prisma.formSubmission.findUnique({
     where: { id: req.params.id },
   });
 
-  if (!existing) { res.status(404).json({ success: false, error: "Submission not found" }); return; }
+  if (!existing) { res.status(404).json({ success: false, error: "Submission not found", code: "SUBMISSION_NOT_FOUND" }); return; }
 
   // Ownership check
   if (existing.submittedById !== userId) {
-    res.status(403).json({ success: false, error: "You do not have permission to delete this submission" });
+    res.status(403).json({ success: false, error: "You do not have permission to delete this submission", code: "YOU_DO_NOT_HAVE_PERMISSION_TO" });
     return;
   }
 
@@ -1129,13 +1129,13 @@ router.patch("/:id/soft-delete", async (req: AuthRequest, res: Response) => {
   const isSystemAdmin = req.user?.user_role?.toLowerCase() === "administrator" || req.user?.specialAccess?.toLowerCase().includes("administrator");
 
   if (!isSystemAdmin) {
-    res.status(403).json({ success: false, error: "Forbidden: Administrators only" });
+    res.status(403).json({ success: false, error: "Forbidden: Administrators only", code: "FORBIDDEN_ADMINISTRATORS_ONLY" });
     return;
   }
 
   const { reason } = req.body;
   if (!reason) {
-    res.status(400).json({ success: false, error: "A reason is required for soft deletion." });
+    res.status(400).json({ success: false, error: "A reason is required for soft deletion.", code: "A_REASON_IS_REQUIRED_FOR_SOFT" });
     return;
   }
 
@@ -1144,7 +1144,7 @@ router.patch("/:id/soft-delete", async (req: AuthRequest, res: Response) => {
   });
 
   if (!existing) {
-    res.status(404).json({ success: false, error: "Submission not found" });
+    res.status(404).json({ success: false, error: "Submission not found", code: "SUBMISSION_NOT_FOUND" });
     return;
   }
 

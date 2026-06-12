@@ -83,7 +83,7 @@ router.get("/search-users", async (req, res: Response) => {
 router.get("/dynamic-options", async (req, res: Response) => {
   const tableName = (req.query.table ?? "") as string;
   if (!tableName || !/^[a-zA-Z0-9_]+$/.test(tableName)) {
-    res.status(400).json({ success: false, error: "Invalid or missing table name" });
+    res.status(400).json({ success: false, error: "Invalid or missing table name", code: "INVALID_OR_MISSING_TABLE_NAME" });
     return;
   }
 
@@ -98,7 +98,7 @@ router.get("/dynamic-options", async (req, res: Response) => {
     res.json({ success: true, data: options });
   } catch (err) {
     console.error(`Error fetching dynamic options from table ${tableName}:`, err);
-    res.status(500).json({ success: false, error: "Failed to fetch dynamic options. Verify the table and 'Options' column exist." });
+    res.status(500).json({ success: false, error: "Failed to fetch dynamic options. Verify the table and 'Options' column exist.", code: "FAILED_TO_FETCH_DYNAMIC_OPTION" });
   }
 });
 
@@ -106,7 +106,7 @@ router.get("/dynamic-options", async (req, res: Response) => {
 router.get("/extended-options", async (req, res: Response) => {
   const service = (req.query.service ?? "") as string;
   if (!service) {
-    res.status(400).json({ success: false, error: "Missing service parameter" });
+    res.status(400).json({ success: false, error: "Missing service parameter", code: "MISSING_SERVICE_PARAMETER" });
     return;
   }
 
@@ -140,14 +140,14 @@ router.get("/extended-options", async (req, res: Response) => {
         });
       }
     } else {
-      res.status(400).json({ success: false, error: "Invalid service type" });
+      res.status(400).json({ success: false, error: "Invalid service type", code: "INVALID_SERVICE_TYPE" });
       return;
     }
 
     res.json({ success: true, data: options });
   } catch (err) {
     console.error(`Error fetching extended options for service ${service}:`, err);
-    res.status(500).json({ success: false, error: "Failed to fetch extended options." });
+    res.status(500).json({ success: false, error: "Failed to fetch extended options.", code: "FAILED_TO_FETCH_EXTENDED_OPTIO" });
   }
 });
 
@@ -196,7 +196,7 @@ router.get("/excel-enabled", async (req: AuthRequest, res: Response) => {
 router.get("/:id", async (req: AuthRequest, res: Response) => {
   const template = await prisma.formTemplate.findUnique({ where: { id: req.params.id } });
   if (!template) {
-    res.status(404).json({ success: false, error: "Form template not found" });
+    res.status(404).json({ success: false, error: "Form template not found", code: "FORM_TEMPLATE_NOT_FOUND" });
     return;
   }
 
@@ -222,7 +222,7 @@ router.get("/:id", async (req: AuthRequest, res: Response) => {
         }
       });
       if (!access) {
-        res.status(403).json({ success: false, error: "You do not have access to this form." });
+        res.status(403).json({ success: false, error: "You do not have access to this form.", code: "YOU_DO_NOT_HAVE_ACCESS_TO_THIS" });
         return;
       }
     }
@@ -260,7 +260,7 @@ router.post("/", requireAdmin as any, async (req: AuthRequest, res: Response) =>
 
   } catch (err: any) {
     if (err?.code === "P2002") {
-      res.status(409).json({ success: false, error: "A form with this name already exists." });
+      res.status(409).json({ success: false, error: "A form with this name already exists.", code: "A_FORM_WITH_THIS_NAME_ALREADY" });
     } else {
       throw err;
     }
@@ -296,7 +296,7 @@ router.patch("/:id", requireAdmin as any, async (req: AuthRequest, res: Response
     res.json({ success: true, data: template });
   } catch (err: any) {
     if (err?.code === "P2002") {
-      res.status(409).json({ success: false, error: "A form with this name already exists." });
+      res.status(409).json({ success: false, error: "A form with this name already exists.", code: "A_FORM_WITH_THIS_NAME_ALREADY" });
     } else {
       throw err;
     }
@@ -310,9 +310,9 @@ router.delete("/:id", requireAdmin as any, async (req, res: Response) => {
     res.json({ success: true });
   } catch (err: any) {
     if (err?.code === "P2003") {
-      res.status(409).json({ success: false, error: "Cannot delete this template because it has existing submissions. Please delete the submissions first." });
+      res.status(409).json({ success: false, error: "Cannot delete this template because it has existing submissions. Please delete the submissions first.", code: "CANNOT_DELETE_THIS_TEMPLATE_BE" });
     } else {
-      res.status(500).json({ success: false, error: "Failed to delete form template." });
+      res.status(500).json({ success: false, error: "Failed to delete form template.", code: "FAILED_TO_DELETE_FORM_TEMPLATE" });
     }
   }
 });

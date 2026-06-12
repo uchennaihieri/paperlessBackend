@@ -11,7 +11,7 @@ router.use(authenticate as any, requireAdmin as any);
 router.get("/", async (req, res: Response) => {
   const type = req.query.type as string;
   if (!type) {
-    res.status(400).json({ success: false, error: "type query parameter is required" });
+    res.status(400).json({ success: false, error: "type query parameter is required", code: "TYPE_QUERY_PARAMETER_IS_REQUIR" });
     return;
   }
 
@@ -45,7 +45,7 @@ router.get("/", async (req, res: Response) => {
 router.post("/", async (req: AuthRequest, res: Response) => {
   const { type, value } = req.body as { type: string; value: string };
   if (!type || !value?.trim()) {
-    res.status(400).json({ success: false, error: "type and value are required" });
+    res.status(400).json({ success: false, error: "type and value are required", code: "TYPE_AND_VALUE_ARE_REQUIRED" });
     return;
   }
 

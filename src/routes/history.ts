@@ -34,7 +34,7 @@ router.get("/", async (req: AuthRequest, res: Response) => {
   const userBranch = req.user?.branch ?? null;
 
   if (!email || !userId) {
-    res.status(401).json({ success: false, error: "Not authenticated" });
+    res.status(401).json({ success: false, error: "Not authenticated", code: "NOT_AUTHENTICATED" });
     return;
   }
 

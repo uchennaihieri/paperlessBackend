@@ -11,8 +11,5 @@ export function errorHandler(
   logger.error(err.message, { stack: err.stack });
 
   const status = (err as any).status ?? (err as any).statusCode ?? 500;
-  res.status(status).json({
-    success: false,
-    error: err.message ?? "Internal Server Error",
-  });
+  res.status(status).json({ success: false, error: err.message ?? "Internal Server Error", code: "INTERNALSERVERERROR" });
 }

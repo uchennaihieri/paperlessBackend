@@ -22,22 +22,22 @@ router.post("/", async (req: AuthRequest, res: Response) => {
   } = req.body;
 
   if (!formName) {
-    res.status(400).json({ success: false, error: "formName is required." });
+    res.status(400).json({ success: false, error: "formName is required.", code: "FORMNAME_IS_REQUIRED" });
     return;
   }
   if (!signatories || signatories.length === 0) {
-    res.status(400).json({ success: false, error: "At least one signatory is required." });
+    res.status(400).json({ success: false, error: "At least one signatory is required.", code: "AT_LEAST_ONE_SIGNATORY_IS_REQU" });
     return;
   }
   if (!initiatorToken) {
-    res.status(400).json({ success: false, error: "initiatorToken is required." });
+    res.status(400).json({ success: false, error: "initiatorToken is required.", code: "INITIATORTOKEN_IS_REQUIRED" });
     return;
   }
 
   // ── Verify the initiator's security token ─────────────────────────────────
   const userEmail = req.user?.email;
   if (!userEmail) {
-    res.status(401).json({ success: false, error: "Not authenticated." });
+    res.status(401).json({ success: false, error: "Not authenticated.", code: "NOT_AUTHENTICATED" });
     return;
   }
 
@@ -50,11 +50,12 @@ router.post("/", async (req: AuthRequest, res: Response) => {
     res.status(404).json({
       success: false,
       error: "No security token registered for your account. Please set one up via the web portal.",
+      code: "NO_SECURITY_TOKEN"
     });
     return;
   }
   if (secData.hashedToken !== hashedInput) {
-    res.status(400).json({ success: false, error: "Invalid signature token." });
+    res.status(400).json({ success: false, error: "Invalid signature token.", code: "INVALID_SIGNATURE_TOKEN" });
     return;
   }
 
