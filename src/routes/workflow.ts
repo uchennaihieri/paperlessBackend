@@ -1034,24 +1034,27 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
           const pdfHeight = page.getHeight();
           
           if (ann.type === "text" && ann.value) {
-            // Standard font size 12
+            const size = ann.fontSize || 14;
             page.drawText(ann.value, {
               x: ann.x,
-              y: pdfHeight - ann.y - 12, // Convert top-left to bottom-left
-              size: 12,
+              y: pdfHeight - ann.y - size, // Convert top-left to bottom-left
+              size: size,
               color: rgb(0, 0, 0)
             });
           } else if (ann.type === "signature" && ann.value) {
+            const isJpg = ann.value.startsWith("data:image/jpeg") || ann.value.startsWith("data:image/jpg");
             const b64 = ann.value.replace(/^data:image\/(png|jpeg|jpg);base64,/, "");
             const imgBytes = Buffer.from(b64, "base64");
-            const image = await pdfDoc.embedPng(imgBytes);
-            // Default sizing, scaled to fit a reasonable bounding box (e.g. 150px wide)
-            const dims = image.scaleToFit(150, 75);
+            const image = isJpg ? await pdfDoc.embedJpg(imgBytes) : await pdfDoc.embedPng(imgBytes);
+            
+            const targetWidth = ann.width || 150;
+            const targetHeight = ann.height || 50;
+
             page.drawImage(image, {
               x: ann.x,
-              y: pdfHeight - ann.y - dims.height, // top-left to bottom-left
-              width: dims.width,
-              height: dims.height,
+              y: pdfHeight - ann.y - targetHeight, // top-left to bottom-left
+              width: targetWidth,
+              height: targetHeight,
             });
           }
         }
