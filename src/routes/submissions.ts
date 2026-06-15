@@ -344,7 +344,9 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
     signatories,
     signingType = "sequential",
     initiatorToken,
+    initiatorSignature,
     draftId,
+    requestToken,
   } = payload;
 
   if (!templateId || !formName) {
@@ -373,7 +375,14 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
   let finalSignatureStatus = "Pending";
   let finalSignedAt: Date | null = null;
 
-  if (initiatorToken) {
+  if (initiatorSignature) {
+    // If the frontend already verified the token or used draw/upload and provides a direct base64 string
+    const userEmail = req.user?.email;
+    if (!userEmail) { res.status(401).json({ success: false, error: "Not logged in", code: "NOT_LOGGED_IN" }); return; }
+    finalSignatureData = initiatorSignature;
+    finalSignatureStatus = "Signed";
+    finalSignedAt = new Date();
+  } else if (initiatorToken) {
     const userEmail = req.user?.email;
     if (!userEmail) { res.status(401).json({ success: false, error: "Not logged in", code: "NOT_LOGGED_IN" }); return; }
     const hashedInput = hashToken(initiatorToken);
@@ -690,6 +699,39 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
       },
       include: { signatories: true },
     });
+  }
+
+  if (requestToken) {
+    try {
+      const existingReq = await prisma.formRequest.findUnique({
+        where: { token: requestToken },
+        include: { batch: true }
+      });
+      if (existingReq && existingReq.batch.status !== "Deleted") {
+        await prisma.formRequest.update({
+          where: { token: requestToken },
+          data: { status: "Completed", submissionId: submission.id, completedAt: new Date() }
+        });
+        
+        // Also update batch status if all requests are completed
+        const pendingCount = await prisma.formRequest.count({
+          where: { batchId: existingReq.batchId, status: "Pending" }
+        });
+        if (pendingCount === 0) {
+          await prisma.formRequestBatch.update({
+            where: { id: existingReq.batchId },
+            data: { status: "Completed" }
+          });
+        } else {
+          await prisma.formRequestBatch.update({
+            where: { id: existingReq.batchId },
+            data: { status: "Partially Completed" }
+          });
+        }
+      }
+    } catch (err) {
+      console.error("[submissions] Failed to mark request as completed:", err);
+    }
   }
 
   // ── Audit: record initial submission event ──

@@ -43,6 +43,8 @@ import creditBureauRouter from "./routes/creditbureau";
 import contractsRouter from "./routes/contracts";
 import statusRouter from "./routes/status";
 import appVersionRouter from "./routes/app-version";
+import publicFormsRouter from "./routes/publicForms";
+import formRequestsRouter from "./routes/formRequests";
 
 const app = express();
 const PORT = process.env.PORT ?? 4000;
@@ -116,7 +118,8 @@ v1.use("/credit-bureau", creditBureauRouter);
 v1.use("/contracts", contractsRouter);
 v1.use("/status", statusRouter);
 v1.use("/app-version", appVersionRouter);
-
+v1.use("/public-forms", publicFormsRouter);
+v1.use("/form-requests", formRequestsRouter);
 
 app.use("/api/v1", v1);
 

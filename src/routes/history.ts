@@ -111,19 +111,32 @@ router.get("/", async (req: AuthRequest, res: Response) => {
 
   // Decide which roles to look up (default: all)
   const includeSubmitted     = roles.length === 0 || roles.includes("submitted");
+  const includeRequested     = roles.length === 0 || roles.includes("requested");
   const includeSigned        = roles.length === 0 || roles.includes("signed");
   const includeTreated       = roles.length === 0 || roles.includes("treated");
   const includeBranchTreated = roles.length === 0 || roles.includes("branch_treated");
   const includeApproved      = roles.length === 0 || roles.includes("approved");
   const includeShared        = roles.length === 0 || roles.includes("shared");
 
-  const [submittedIds, signatoryIds, treatedIds, branchTreatedIds, approvedIds] = await Promise.all([
+  const [submittedIds, requestedIds, signatoryIds, treatedIds, branchTreatedIds, approvedIds] = await Promise.all([
     // 1. Submissions the user created
     includeSubmitted
       ? prisma.formSubmission.findMany({
           where: { submittedById: userId, ...baseFilter },
           select: { id: true },
         }).then(rows => rows.map(r => r.id))
+      : Promise.resolve([]),
+
+    // 1b. Submissions generated from requests initiated by the user
+    includeRequested
+      ? prisma.formRequest.findMany({
+          where: {
+            batch: { requestedBy: { equals: email, mode: "insensitive" } },
+            submissionId: { not: null },
+            status: "Completed",
+          },
+          select: { submissionId: true },
+        }).then(rows => rows.map(r => r.submissionId!))
       : Promise.resolve([]),
 
     // 2. Submissions where the user is a signatory (signed or declined)
@@ -206,6 +219,7 @@ router.get("/", async (req: AuthRequest, res: Response) => {
 
   const allIds = [...new Set([
     ...submittedIds,
+    ...requestedIds,
     ...signatoryIds,
     ...treatedIds,
     ...branchTreatedIds,
@@ -288,6 +302,7 @@ router.get("/", async (req: AuthRequest, res: Response) => {
   // ── Annotate each item with the user's role(s) ──────────────────────────────
   const signatoryIdSet     = new Set(signatoryIds);
   const submittedIdSet     = new Set(submittedIds);
+  const requestedIdSet     = new Set(requestedIds);
   const treatedIdSet       = new Set(treatedIds);
   const branchTreatedIdSet = new Set(branchTreatedIds);
   const approvedIdSet      = new Set(approvedIds);
@@ -296,6 +311,7 @@ router.get("/", async (req: AuthRequest, res: Response) => {
   const data = rows.map((sub: any) => {
     const myRoles: string[] = [];
     if (submittedIdSet.has(sub.id)) myRoles.push("submitted");
+    if (requestedIdSet.has(sub.id)) myRoles.push("requested");
     if (signatoryIdSet.has(sub.id)) {
       const sigRow = sub.signatories.find(
         (s: any) => s.email.toLowerCase() === email.toLowerCase()

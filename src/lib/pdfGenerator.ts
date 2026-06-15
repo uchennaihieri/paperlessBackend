@@ -240,10 +240,17 @@ export async function generateSubmissionPdf(id: string): Promise<{ buffer: Buffe
   // ── 2. Build form-input mappings (form field label → PDF field name) ─────────
   const formFields = (submission.template?.fields as any[]) || [];
   const pdfDataMapping: Record<string, any> = {};
+  let hasSignableDocument = false;
+  
   for (const ff of formFields) {
+    if (ff.type === "signable_document") hasSignableDocument = true;
     if (ff.mappedPdfField) {
       pdfDataMapping[ff.mappedPdfField] = (submission.formResponses as any)[ff.label];
     }
+  }
+
+  if (hasSignableDocument && submission.signatories) {
+    submission.signatories = submission.signatories.filter((s: any) => s.position === 1);
   }
 
   if (pdfTemplateId) {

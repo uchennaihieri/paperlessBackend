@@ -66,6 +66,9 @@ model FormTemplate {
   submissions FormSubmission[]
   prerequisiteFor SubmissionPrerequisite[]
   formAccess  FormAccess[]
+  isPublic    Boolean @default(false)
+  publicSlug  String? @unique
+  requestBatches FormRequestBatch[]
 }
 
 // Main form submission record
@@ -91,6 +94,9 @@ model FormSubmission {
   prerequisites      SubmissionPrerequisite[] @relation("MainSubmission")
   prerequisiteFor    SubmissionPrerequisite?  @relation("PrereqSubmission")
   contractRequests   ContractRequest[]
+  requestBatchId     String?
+  publicSubmitterEmail String?
+  publicSubmitterName  String?
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt
 }
@@ -451,4 +457,30 @@ model PdfJobQueue {
   updatedAt          DateTime @updatedAt
 
   @@map("pdf_job_queue")
+}
+
+model FormRequestBatch {
+  id          String   @id @default(cuid())
+  templateId  String
+  template    FormTemplate @relation(fields: [templateId], references: [id])
+  requestedBy String   // Email of the user who clicked 'Request Form Fill'
+  message     String?  @db.Text
+  prefilledData Json?
+  status      String   @default("Pending") // Pending, Partially Completed, Completed
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  requests    FormRequest[]
+}
+
+model FormRequest {
+  id           String   @id @default(cuid())
+  batchId      String
+  batch        FormRequestBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  targetEmail  String
+  token        String   @unique
+  status       String   @default("Pending") // Pending, Completed
+  submissionId String?
+  completedAt  DateTime?
+  createdAt    DateTime @default(now())
 }

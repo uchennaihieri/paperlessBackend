@@ -316,5 +316,32 @@ router.delete("/:id", requireAdmin as any, async (req, res: Response) => {
     }
   }
 });
+// ── POST /api/v1/forms/:id/toggle-public ──────────────────────────────────────
+router.post("/:id/toggle-public", requireAdmin as any, async (req: AuthRequest, res: Response) => {
+  const { isPublic } = req.body;
+  try {
+    const template = await prisma.formTemplate.findUnique({ where: { id: req.params.id } });
+    if (!template) {
+      res.status(404).json({ success: false, error: "Form template not found", code: "FORM_TEMPLATE_NOT_FOUND" });
+      return;
+    }
+
+    let slug = template.publicSlug;
+    if (isPublic && !slug) {
+      const words = ["alpha", "bravo", "delta", "echo", "fox", "golf", "hotel", "india", "lima", "mike", "oscar", "papa", "romeo", "sierra", "tango", "victor", "dummy", "cathouse", "mango", "zebra", "apple", "ocean", "river", "cloud"];
+      const w = words[Math.floor(Math.random() * words.length)];
+      const n = Math.floor(Math.random() * 10000);
+      slug = `${w}${n}`;
+    }
+
+    const updated = await prisma.formTemplate.update({
+      where: { id: req.params.id },
+      data: { isPublic, publicSlug: isPublic ? slug : null },
+    });
+    res.json({ success: true, data: updated });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message, code: "FAILED_TO_TOGGLE_PUBLIC_STATUS" });
+  }
+});
 
 export default router;
