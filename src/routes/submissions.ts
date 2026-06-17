@@ -512,6 +512,30 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
     console.error("[extended_service] Reference resolution failed:", e);
   }
 
+  // ── Resolve Event Selectors ────────────────────────────────────────────────
+  try {
+    for (const field of templateFields) {
+      if ((field as any).type !== "event_selector") continue;
+      // Depending on how formData is keyed (id or label)
+      const responseKey = updatedResponses[field.id] !== undefined ? field.id : field.label;
+      const eventId: string = (updatedResponses[responseKey] ?? "").toString().trim();
+      if (!eventId) continue;
+
+      const event = await prisma.event.findUnique({
+        where: { id: eventId },
+        include: { facilitators: true }
+      });
+      if (event) {
+        // Replace the raw ID with a human-readable name for display/PDF
+        updatedResponses[responseKey] = `${event.name} (${event.reference})`;
+        // Also keep the raw ID so it can be queried robustly
+        updatedResponses[`${responseKey}_id`] = event.id;
+      }
+    }
+  } catch (e) {
+    console.error("[event_selector] Event resolution failed:", e);
+  }
+
   // ── Handle Internal Forms (Custom Forms as Attachments) ─────────────────────
   const internalFormTasks: Array<{ fieldName: string, templateId: string, templateName: string, data: any }> = [];
 

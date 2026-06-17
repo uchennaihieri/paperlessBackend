@@ -1,5 +1,9 @@
 import { launchBrowser } from "./puppeteerBrowser";
 import Handlebars from "handlebars";
+
+Handlebars.registerHelper("add", function (a, b) {
+  return Number(a) + Number(b);
+});
 import prisma from "./prisma";
 import { PDFDocument, rgb } from "pdf-lib";
 import { downloadFromSharePoint } from "./sharepoint";
@@ -232,7 +236,7 @@ export async function generateSubmissionPdf(id: string): Promise<{ buffer: Buffe
 
   if (!submission) return null;
 
-  const filename = `${submission.formName.replace(/\s+/g, "_")}-${submission.id.slice(-6)}.pdf`;
+  const filename = `${submission.formName.replace(/[^a-zA-Z0-9_-]+/g, "_")}-${submission.id.slice(-6)}.pdf`;
 
   // ── 1. Resolve PDF template from FormTemplate.pdfTemplateId ──────────────────
   const pdfTemplateId = (submission.template as any)?.pdfTemplateId ?? null;

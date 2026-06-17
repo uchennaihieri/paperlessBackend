@@ -946,6 +946,7 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
     select: {
       status: true,
       reference: true,
+      formName: true,
       signingType: true,
       template: { select: { needsContract: true, contractTemplateId: true, formTreater: true, pdfGeneratorType: true, fields: true } },
       submittedBy: { select: { finca_email: true } },
@@ -965,7 +966,8 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
   const signerName = signerUser?.user_name ?? email;
 
   // If there's no treater branch configured, skip "Processing" and go straight to "Completed"
-  const hasTreater = !!(currentForSign?.template?.formTreater && currentForSign.template.formTreater.toLowerCase() !== "none");
+  const isMasterRoster = currentForSign?.formName?.startsWith("Master Roster:");
+  const hasTreater = !isMasterRoster && !!(currentForSign?.template?.formTreater && currentForSign.template.formTreater.toLowerCase() !== "none");
   let newSignStatus = unsigned === 0 ? (hasTreater ? "Processing" : "Completed") : "In-review";
 
   let hasPendingPrereqs = false;
@@ -1175,6 +1177,12 @@ router.post("/:id/decline", async (req: AuthRequest, res: Response) => {
       data: { committed: false },
     });
   }
+
+  // Detach from Event if it was a Master Roster submission so it can be reinitiated
+  await prisma.event.updateMany({
+    where: { masterSubmissionId: req.params.id },
+    data: { masterSubmissionId: null }
+  });
 
   res.json({ success: true });
 });
@@ -1393,6 +1401,33 @@ router.post("/:id/generate-pdf", async (req: AuthRequest, res: Response) => {
   } catch (err: any) {
     console.error("Error manually generating PDF:", err);
     res.status(500).json({ success: false, error: err.message || "Error generating PDF", code: "INTERNALSERVERERROR" });
+  }
+});
+
+// ── GET /api/v1/workflow/:id/preview-pdf ─────────────────────────────────────
+// Generates a dynamic preview of the current submission PDF without saving it
+router.get("/:id/preview-pdf", async (req: AuthRequest, res: Response) => {
+  try {
+    const submission = await prisma.formSubmission.findUnique({
+      where: { id: req.params.id },
+      select: { template: { select: { pdfGeneratorType: true } } }
+    });
+    
+    if (!submission) {
+      return res.status(404).json({ success: false, error: "Submission not found" });
+    }
+
+    const pdfResult = await generateSubmissionPdf(req.params.id);
+    if (!pdfResult) {
+      return res.status(400).json({ success: false, error: "Could not generate PDF" });
+    }
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${pdfResult.filename}"`);
+    res.send(Buffer.from(pdfResult.buffer));
+  } catch (err: any) {
+    console.error("Error generating preview PDF:", err);
+    res.status(500).json({ success: false, error: "Server error generating PDF" });
   }
 });
 

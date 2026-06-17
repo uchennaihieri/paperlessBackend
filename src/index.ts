@@ -45,6 +45,7 @@ import statusRouter from "./routes/status";
 import appVersionRouter from "./routes/app-version";
 import publicFormsRouter from "./routes/publicForms";
 import formRequestsRouter from "./routes/formRequests";
+import { eventsRouter } from "./routes/events";
 
 const app = express();
 const PORT = process.env.PORT ?? 4000;
@@ -108,6 +109,7 @@ v1.use("/templates", templatesRouter);
 v1.use("/documents", documentsRouter);
 v1.use("/history", historyRouter);
 v1.use("/audit", auditRouter);
+v1.use("/events", eventsRouter);
 v1.use("/identity", identityRouter);
 v1.use("/mobile_submit", mobileSubmitRouter);
 v1.use("/prerequisites", prerequisitesRouter);
@@ -131,9 +133,12 @@ app.use(errorHandler);
 //   logger.info(`🚀  Paperless API listening on http://localhost:${PORT}`);
 // });
 
+import { startEventCron } from "./lib/eventCron";
+
 app.listen(Number(PORT), "0.0.0.0", () => {
   logger.info(`🚀 Paperless API listening on port ${PORT}`);
   startPdfWorker();
+  startEventCron();
 });
 
 export default app;
