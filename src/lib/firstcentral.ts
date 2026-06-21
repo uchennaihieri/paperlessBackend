@@ -1,8 +1,11 @@
 import { logger } from "./logger";
 
-const BASE_URL  = process.env.FIRSTCENTRAL_BASE_URL ?? "https://uat.firstcentralcreditbureau.com/firstcentralrestv2";
-const USERNAME  = process.env.FIRSTCENTRAL_USERNAME ?? "";
-const PASSWORD  = process.env.FIRSTCENTRAL_PASSWORD ?? "";
+const BASE_URL = process.env.FIRSTCENTRAL_BASE_URL ?? "https://uat.firstcentralcreditbureau.com/firstcentralrestv2";
+const USERNAME = process.env.FIRSTCENTRAL_USERNAME ?? "";
+const PASSWORD = process.env.FIRSTCENTRAL_PASSWORD ?? "";
+
+
+
 
 // ── Token cache (tickets expire in 5 h, refresh at 4 h 50 m) ─────────────────
 interface TicketCache { ticket: string; expiresAt: number }
@@ -61,6 +64,17 @@ export interface ConsumerMatchResult {
   [key: string]: any;
 }
 
+const isLive = BASE_URL.includes("online.firstcentralcreditbureau.com");
+
+
+
+function sanitizeEnquiryReason(reason: string): string {
+  if (!isLive) return reason; // Test environment accepts "Test", "Credit Check", etc.
+
+  // As requested, use ONLY this specific reason in the live environment
+  return "credit scoring of the client by credit bureau";
+}
+
 export async function consumerMatchByBvn(
   bvn: string,
   enquiryReason = "Credit Check",
@@ -72,16 +86,16 @@ export async function consumerMatchByBvn(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "Accept":       "application/json",
+      "Accept": "application/json",
     },
     body: JSON.stringify({
-      DataTicket:    ticket,       // must be in the body per FC docs
-      EnquiryReason: enquiryReason,
-      ConsumerName:  "",
-      DateOfBirth:   "",
+      DataTicket: ticket,       // must be in the body per FC docs
+      EnquiryReason: sanitizeEnquiryReason(enquiryReason),
+      ConsumerName: "",
+      DateOfBirth: "",
       Identification: bvn,         // BVN goes in Identification field
-      Accountno:     "",
-      ProductID:     String(productId),
+      Accountno: "",
+      ProductID: String(productId),
     }),
   });
 
@@ -97,8 +111,8 @@ export async function consumerMatchByBvn(
   const list: ConsumerMatchResult[] = Array.isArray(raw)
     ? (raw[0]?.MatchedConsumer ?? raw[0]?.MatchedConsumers ?? raw)
     : Array.isArray(raw?.MatchedConsumer)
-    ? raw.MatchedConsumer
-    : raw?.MatchedConsumers ?? [];
+      ? raw.MatchedConsumer
+      : raw?.MatchedConsumers ?? [];
 
   return { count: list.length, matched: list };
 }
@@ -124,12 +138,12 @@ export async function getConsumerDetailedCreditReport(opts: {
     method: "POST",
     headers: { "Content-Type": "application/json", "Accept": "application/json" },
     body: JSON.stringify({
-      DataTicket:                ticket,
+      DataTicket: ticket,
       consumerID,
-      EnquiryID:                 enquiryID,
+      EnquiryID: enquiryID,
       consumerMergeList,
       SubscriberEnquiryEngineID: subscriberEnquiryEngineID,
-      productid:                 productId,   // number, not string
+      productid: productId,   // number, not string
     }),
   });
 
@@ -154,10 +168,10 @@ export async function getConsumerDetailedCreditReport(opts: {
       method: "POST",
       headers: { "Content-Type": "application/json", "Accept": "application/json" },
       body: JSON.stringify({
-        DataTicket:                ticket,
+        DataTicket: ticket,
         consumerID,
-        EnquiryID:                 enquiryID,
-        consumerMergeList:         mergeList,
+        EnquiryID: enquiryID,
+        consumerMergeList: mergeList,
         SubscriberEnquiryEngineID: subscriberEnquiryEngineID,
         // productid is NOT a valid field for /GetConsumerFullCreditReport
       }),

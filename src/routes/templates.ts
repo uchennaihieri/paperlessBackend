@@ -42,15 +42,34 @@ const DATA_DICTIONARY = [
   { category: "Signatories", path: "Signatories.1.signatureUrl",      label: "Signatory 2 — Signature URL" },
   { category: "Signatories", path: "Signatories.1.dateSigned",        label: "Signatory 2 — Date Signed" },
   { category: "Signatories", path: "Signatories.1.dateTime",          label: "Signatory 2 — Date & Time" },
-  // Form Input — means this field will be paired in the Form Builder
-  { category: "Form Input",  path: "FormInput",                       label: "← Pair in Form Builder" },
+  
+  // Contract Data
+  { category: "Contract Data", path: "Contract.status",                 label: "Contract Status" },
+  { category: "Contract Data", path: "Contract.internalSignerJobTitle", label: "Internal Signer Job Title" },
+  { category: "Contract Data", path: "Contract.internalSignatureImage", label: "Internal Signer Signature" },
+  { category: "Contract Data", path: "Contract.externalSignerName",     label: "External Signer Name" },
+  { category: "Contract Data", path: "Contract.externalSignerEmail",    label: "External Signer Email" },
+  { category: "Contract Data", path: "Contract.externalSignedDate",     label: "External Signed Date" },
+  { category: "Contract Data", path: "Contract.externalSignatureImage", label: "External Signer Signature" },
+
+  // Final Approver Data
+  { category: "Final Approver", path: "FinalApprover.name",           label: "Final Approver Name" },
+  { category: "Final Approver", path: "FinalApprover.email",          label: "Final Approver Email" },
+  { category: "Final Approver", path: "FinalApprover.jobTitle",       label: "Final Approver Job Title" },
+  { category: "Final Approver", path: "FinalApprover.signatureImage", label: "Final Approver Signature" },
 ];
 
 // GET /api/v1/templates[?type=document|html]
 router.get("/", async (req: Request, res: Response) => {
   const typeFilter = req.query.type as string | undefined;
+  const availableFor = req.query.availableFor as string | undefined;
+  
+  const where: any = {};
+  if (typeFilter) where.type = typeFilter;
+  if (availableFor) where.availableFor = { has: availableFor };
+
   const templates = await prisma.pdfTemplate.findMany({
-    where: typeFilter ? { type: typeFilter } : undefined,
+    where,
     orderBy: { createdAt: "desc" },
   });
   res.json({ success: true, data: templates });
@@ -60,49 +79,18 @@ router.get("/", async (req: Request, res: Response) => {
 // Returns the canonical data dictionary plus any custom fields from linked FormTemplates.
 // Must be registered BEFORE /:id to avoid Express treating "data-dictionary" as an id param.
 router.get("/data-dictionary", async (req: Request, res: Response) => {
-  const templateId = req.query.templateId as string | undefined;
+  const formTemplateId = req.query.formTemplateId as string | undefined;
   let dynamicDict: typeof DATA_DICTIONARY = [];
 
-  if (templateId) {
+  if (formTemplateId) {
     try {
-      const formTemplates = await prisma.formTemplate.findMany({
-        where: {
-          OR: [
-            { pdfTemplateId: templateId },
-            { contractTemplateId: templateId }
-          ]
-        }
+      const formTemplate = await prisma.formTemplate.findUnique({
+        where: { id: formTemplateId }
       });
 
-      for (const ft of formTemplates) {
-        if (ft.needsContract || ft.contractTemplateId) {
-          const catName = `Contract Prerequisite: ${ft.name}`;
-          dynamicDict.push({ category: catName, path: "Contract.status", label: "Contract Status" });
-          dynamicDict.push({ category: catName, path: "Contract.internalSignerJobTitle", label: "Internal Signer Job Title" });
-          dynamicDict.push({ category: catName, path: "Contract.internalSignatureImage", label: "Internal Signer Signature" });
-          dynamicDict.push({ category: catName, path: "Contract.externalSignerName", label: "External Signer Name" });
-          dynamicDict.push({ category: catName, path: "Contract.externalSignerEmail", label: "External Signer Email" });
-          dynamicDict.push({ category: catName, path: "Contract.externalSignedDate", label: "External Signed Date" });
-          dynamicDict.push({ category: catName, path: "Contract.externalSignatureImage", label: "External Signer Signature" });
-        }
-        
-        const faCatName = `Final Approver Data: ${ft.name}`;
-        dynamicDict.push({ category: faCatName, path: "FinalApprover.name", label: "Final Approver Name" });
-        dynamicDict.push({ category: faCatName, path: "FinalApprover.email", label: "Final Approver Email" });
-        dynamicDict.push({ category: faCatName, path: "FinalApprover.jobTitle", label: "Final Approver Job Title" });
-        dynamicDict.push({ category: faCatName, path: "FinalApprover.signatureImage", label: "Final Approver Signature" });
-
-        const fields = (ft.fields as any[]) || [];
+      if (formTemplate) {
+        const fields = (formTemplate.fields as any[]) || [];
         for (const f of fields) {
-          if (f.label) {
-            // Keep the raw unbracketed version for backwards compatibility, but also add bracketed if it has spaces
-            const path = f.label.includes(" ") ? `Responses.[${f.label}]` : `Responses.${f.label}`;
-            dynamicDict.push({
-              category: `Form Input: ${ft.name}`,
-              path,
-              label: f.label
-            });
-          }
           if (f.isPrerequisite && f.targetFormTemplateId) {
             try {
               const targetForm = await prisma.formTemplate.findUnique({ where: { id: f.targetFormTemplateId } });
@@ -144,12 +132,12 @@ router.get("/data-dictionary", async (req: Request, res: Response) => {
 });
 
 // POST /api/v1/templates
-// Body: { name, type, sharepointPath }
+// Body: { name, type, sharepointPath, availableFor }
 // Frontend auto-prefixes sharepointPath based on type:
 //   document → "templates/<filename>.pdf"
 //   html     → "htmltemplates/<filename>.html"
 router.post("/", async (req: Request, res: Response) => {
-  const { name, sharepointPath, type } = req.body;
+  const { name, sharepointPath, type, availableFor } = req.body;
   if (!name || !sharepointPath) {
     res.status(400).json({ success: false, error: "name and sharepointPath are required", code: "NAME_AND_SHAREPOINTPATH_ARE_RE" });
     return;
@@ -157,7 +145,12 @@ router.post("/", async (req: Request, res: Response) => {
   const templateType = type === "html" ? "html" : "document";
   try {
     const template = await prisma.pdfTemplate.create({
-      data: { name, sharepointPath, type: templateType },
+      data: { 
+        name: name.toUpperCase(), 
+        sharepointPath, 
+        type: templateType,
+        availableFor: Array.isArray(availableFor) && availableFor.length > 0 ? availableFor : ["forms"]
+      } as any,
     });
     res.status(201).json({ success: true, data: template });
   } catch (err: any) {
@@ -183,6 +176,25 @@ router.get("/:id", async (req: Request, res: Response) => {
   res.json({ success: true, data: template });
 });
 
+// PATCH /api/v1/templates/:id
+router.patch("/:id", async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { name, sharepointPath, availableFor } = req.body;
+  try {
+    const template = await prisma.pdfTemplate.update({
+      where: { id },
+      data: { 
+        name: name ? name.toUpperCase() : undefined, 
+        sharepointPath, 
+        availableFor 
+      } as any,
+    });
+    res.json({ success: true, data: template });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: "Failed to update template", code: "FAILED_TO_UPDATE_TEMPLATE" });
+  }
+});
+
 // DELETE /api/v1/templates/:id
 router.delete("/:id", async (req: Request, res: Response) => {
   const { id } = req.params;
@@ -191,6 +203,57 @@ router.delete("/:id", async (req: Request, res: Response) => {
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, error: "Failed to delete template", code: "FAILED_TO_DELETE_TEMPLATE" });
+  }
+});
+
+// POST /api/v1/templates/:id/extract-fields
+router.post("/:id/extract-fields", async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const template = await prisma.pdfTemplate.findUnique({ where: { id } });
+  
+  if (!template) {
+    res.status(404).json({ success: false, error: "Template not found" });
+    return;
+  }
+  if (template.type !== "html") {
+    res.status(400).json({ success: false, error: "Extraction is only supported for HTML templates" });
+    return;
+  }
+
+  try {
+    const { buffer } = await downloadFromSharePoint(template.sharepointPath);
+    const content = buffer.toString("utf-8");
+
+    const extractedFields: { name: string; type: "text" | "block" }[] = [];
+    
+    const addField = (name: string, type: "text" | "block") => {
+      // Split by space to handle things like {{field_name fallback}} or simple helpers, taking the first token
+      const cleanName = name.trim().split(" ")[0]; 
+      if (!cleanName || cleanName === "else") return;
+      if (!extractedFields.find(f => f.name === cleanName)) {
+        extractedFields.push({ name: cleanName, type });
+      }
+    };
+
+    // Step 1: Extract standard Handlebars fields {{field_name}}
+    // Regex matches {{ followed by anything except #, /, >, or space, then closing }}
+    // The (?<!\\) ensures we IGNORE \{{escaped}} fields which are auto-computed by JS
+    const standardRegex = /(?<!\\)\{\{([^#\/\s>][^}]*)\}\}/g;
+    let match;
+    while ((match = standardRegex.exec(content)) !== null) {
+      addField(match[1], "text");
+    }
+
+    // Step 3: Extract conditional block fields {{#if field_name}}
+    const ifRegex = /\{\{#if\s+([^}]+)\}\}/g;
+    while ((match = ifRegex.exec(content)) !== null) {
+      addField(match[1], "block");
+    }
+
+    res.json({ success: true, data: extractedFields });
+  } catch (err: any) {
+    console.error("Extraction error:", err);
+    res.status(500).json({ success: false, error: "Failed to extract fields: " + err.message });
   }
 });
 
@@ -290,91 +353,6 @@ router.delete("/:id/fields/:fid", async (req: Request, res: Response) => {
 
 
 
-
-// GET /api/v1/templates/:id/extract-placeholders
-// Downloads the HTML file from SharePoint, parses every {{placeholder}} and
-// {{#each block}}, then returns them merged with any saved PdfTemplateField rows.
-// Response shape:
-// {
-//   placeholders: [
-//     { name: "amount", type: "text"|"block",
-//       savedField: { id, mappingPath } | null   ← null if not yet saved to DB
-//     }
-//   ],
-//   dataDictionary: DATA_DICTIONARY,
-//   rawHtml: "<html>..." (for preview iframe)
-// }
-router.get("/:id/extract-placeholders", async (req: Request, res: Response) => {
-  const { id } = req.params;
-  const template = await prisma.pdfTemplate.findUnique({
-    where: { id },
-    include: { fields: true },
-  });
-
-  if (!template) {
-    res.status(404).json({ success: false, error: "Template not found", code: "TEMPLATE_NOT_FOUND" });
-    return;
-  }
-
-  if ((template as any).type !== "html") {
-    res.status(400).json({ success: false, error: "Only HTML templates support placeholder extraction", code: "ONLY_HTML_TEMPLATES_SUPPORT_PL" });
-    return;
-  }
-
-  try {
-    const { buffer } = await downloadFromSharePoint(template.sharepointPath);
-    const html = buffer.toString("utf-8");
-
-    // Step 1: Extract {{#each blockName}} → block type
-    const blockNames = new Set<string>();
-    const blockRe = /\{\{#each\s+([\w.[\]]+)\s*\}\}/g;
-    let bm: RegExpExecArray | null;
-    while ((bm = blockRe.exec(html)) !== null) blockNames.add(bm[1]);
-
-    // Step 2: Extract every {{placeholder}} (excluding #/^/! directives and helpers)
-    const allNames = new Set<string>();
-
-    // ── KEY FIX: block variable names are NOT in allNames yet (they come from
-    //    {{#each X}} which is excluded from varRe). Add them explicitly.
-    for (const bn of blockNames) allNames.add(bn);
-
-    const varRe = /\{\{([^#^/!>][^}]*)\}\}/g;
-    let m: RegExpExecArray | null;
-    while ((m = varRe.exec(html)) !== null) {
-      const raw = m[1].trim().split(/[\s.|[]/)[0]; // take first segment only
-      // Skip: `this`, `@index`, `@key`, bare closing `/`, and empty strings
-      if (raw && raw !== "this" && raw !== "else" && !raw.startsWith("@") && !raw.startsWith("/")) {
-        allNames.add(raw);
-      }
-    }
-
-    // Step 3: Build unified placeholder list (ordered: blocks first, then text vars)
-    const ordered = [
-      ...Array.from(blockNames),
-      ...Array.from(allNames).filter((n) => !blockNames.has(n)),
-    ];
-
-    const placeholders = ordered.map((name) => {
-      const savedField = (template.fields as any[]).find((f: any) => f.name === name) ?? null;
-      return {
-        name,
-        type: blockNames.has(name) ? "block" : "text",
-        savedField: savedField ? { id: savedField.id, mappingPath: savedField.mappingPath ?? null, type: savedField.type } : null,
-      };
-    });
-
-    res.json({
-      success: true,
-      data: {
-        placeholders,
-        dataDictionary: DATA_DICTIONARY,
-        rawHtml: html,
-      },
-    });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message ?? "Failed to extract placeholders", code: "INTERNALSERVERERROR" });
-  }
-});
 
 // POST /api/v1/templates/:id/sync-fields
 // Bulk upsert: called by the Designer when the admin hits "Save All".

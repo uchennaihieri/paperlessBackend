@@ -418,11 +418,17 @@ eventsRouter.get("/:id/preview-pdf", async (req: Request, res: Response) => {
           name: `Master Roster Template (${event.pdfTemplateId})`,
           fields: [],
           pdfTemplateId: event.pdfTemplateId,
+          templateMappings: event.templateMappings ?? undefined,
           isInternal: true,
           pdfGeneratorType: pdfTemplate?.type === "html" ? "html" : "document",
           formOwner: "System",
           formTreater: "System"
         }
+      });
+    } else {
+      formTemplate = await prisma.formTemplate.update({
+        where: { id: formTemplate.id },
+        data: { templateMappings: event.templateMappings ?? undefined }
       });
     }
 

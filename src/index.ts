@@ -46,6 +46,7 @@ import appVersionRouter from "./routes/app-version";
 import publicFormsRouter from "./routes/publicForms";
 import formRequestsRouter from "./routes/formRequests";
 import { eventsRouter } from "./routes/events";
+import delegationsRouter from "./routes/delegations";
 
 const app = express();
 const PORT = process.env.PORT ?? 4000;
@@ -122,6 +123,7 @@ v1.use("/status", statusRouter);
 v1.use("/app-version", appVersionRouter);
 v1.use("/public-forms", publicFormsRouter);
 v1.use("/form-requests", formRequestsRouter);
+v1.use("/delegations", delegationsRouter);
 
 app.use("/api/v1", v1);
 

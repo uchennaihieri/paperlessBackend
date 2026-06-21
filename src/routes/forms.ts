@@ -233,7 +233,7 @@ router.get("/:id", async (req: AuthRequest, res: Response) => {
 
 // ── POST /api/v1/forms ─────────────────────────────────────────────────────────
 router.post("/", requireAdmin as any, async (req: AuthRequest, res: Response) => {
-  const { name, description, fields, formOwner, formTreater, formTreaterRole, htmlTemplate, pdfGeneratorType, generatesExcel, pdfTemplateId, mobileEnabled, accountServicesEnabled, isInternal, needsContract, contractTemplateId, automatedSignatories, automatedSigningType } = req.body;
+  const { name, description, fields, formOwner, formTreater, formTreaterRole, htmlTemplate, pdfGeneratorType, generatesExcel, pdfTemplateId, mobileEnabled, accountServicesEnabled, isInternal, needsContract, contractTemplateId, automatedSignatories, automatedSigningType, templateMappings } = req.body;
   try {
     const template = await prisma.formTemplate.create({
       data: {
@@ -254,7 +254,8 @@ router.post("/", requireAdmin as any, async (req: AuthRequest, res: Response) =>
         contractTemplateId: contractTemplateId || null,
         automatedSignatories: automatedSignatories || null,
         automatedSigningType: automatedSigningType || null,
-      },
+        templateMappings: templateMappings || null,
+      } as any,
     });
     res.status(201).json({ success: true, data: template });
 
@@ -269,7 +270,7 @@ router.post("/", requireAdmin as any, async (req: AuthRequest, res: Response) =>
 
 // ── PATCH /api/v1/forms/:id ───────────────────────────────────────────────────
 router.patch("/:id", requireAdmin as any, async (req: AuthRequest, res: Response) => {
-  const { name, description, fields, formOwner, formTreater, formTreaterRole, htmlTemplate, pdfGeneratorType, generatesExcel, pdfTemplateId, mobileEnabled, accountServicesEnabled, isInternal, needsContract, contractTemplateId, automatedSignatories, automatedSigningType } = req.body;
+  const { name, description, fields, formOwner, formTreater, formTreaterRole, htmlTemplate, pdfGeneratorType, generatesExcel, pdfTemplateId, mobileEnabled, accountServicesEnabled, isInternal, needsContract, contractTemplateId, automatedSignatories, automatedSigningType, templateMappings } = req.body;
   try {
     const template = await prisma.formTemplate.update({
       where: { id: req.params.id },
@@ -291,7 +292,8 @@ router.patch("/:id", requireAdmin as any, async (req: AuthRequest, res: Response
         contractTemplateId: contractTemplateId || null,
         automatedSignatories: automatedSignatories || null,
         automatedSigningType: automatedSigningType || null,
-      },
+        templateMappings: templateMappings || null,
+      } as any,
     });
     res.json({ success: true, data: template });
   } catch (err: any) {
@@ -341,6 +343,52 @@ router.post("/:id/toggle-public", requireAdmin as any, async (req: AuthRequest, 
     res.json({ success: true, data: updated });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message, code: "FAILED_TO_TOGGLE_PUBLIC_STATUS" });
+  }
+});
+
+// ── POST /api/v1/forms/:id/copy ───────────────────────────────────────────────
+router.post("/:id/copy", requireAdmin as any, async (req: AuthRequest, res: Response) => {
+  try {
+    const template = await prisma.formTemplate.findUnique({ where: { id: req.params.id } });
+    if (!template) {
+      res.status(404).json({ success: false, error: "Form template not found" });
+      return;
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { id, createdAt, updatedAt, publicSlug, isPublic, ...rest } = template as any;
+    let newName = `${template.name} copy`;
+    let newTemplate;
+
+    let attempts = 0;
+    while (attempts < 20) {
+      try {
+        newTemplate = await prisma.formTemplate.create({
+          data: {
+            ...rest,
+            name: newName,
+            isPublic: false,
+            publicSlug: null
+          }
+        });
+        break; // Success
+      } catch (err: any) {
+        if (err?.code === "P2002") {
+          newName = `${newName} copy`;
+          attempts++;
+        } else {
+          throw err;
+        }
+      }
+    }
+
+    if (!newTemplate) {
+      throw new Error("Failed to generate a unique copied name after 20 attempts.");
+    }
+
+    res.status(201).json({ success: true, data: newTemplate });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message, code: "FAILED_TO_COPY_TEMPLATE" });
   }
 });
 

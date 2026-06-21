@@ -194,6 +194,7 @@ async function buildUnifiedContext(submission: any, pdfDataMapping: Record<strin
     TimeNow,
     Questions,
     Responses: raw,
+    formResponses: raw, // alias to support mapping paths like 'formResponses.VendorName'
     Signatories,
     Prerequisites,
     Contract,
@@ -240,6 +241,7 @@ export async function generateSubmissionPdf(id: string): Promise<{ buffer: Buffe
 
   // ── 1. Resolve PDF template from FormTemplate.pdfTemplateId ──────────────────
   const pdfTemplateId = (submission.template as any)?.pdfTemplateId ?? null;
+  const globalTemplateMappings = (submission.template as any)?.templateMappings || {};
 
   // ── 2. Build form-input mappings (form field label → PDF field name) ─────────
   const formFields = (submission.template?.fields as any[]) || [];
@@ -276,9 +278,10 @@ export async function generateSubmissionPdf(id: string): Promise<{ buffer: Buffe
 
           // Resolve every saved field's mappingPath into the flat Handlebars context
           for (const field of pdfTemplate.fields as any[]) {
-            if (!field.mappingPath) continue;
-            if (field.mappingPath === "FormInput") continue; // handled via pdfDataMapping already
-            unified[field.name] = resolveContextPath(field.mappingPath, unified);
+            const mappingPath = globalTemplateMappings[field.name] || field.mappingPath;
+            if (!mappingPath) continue;
+            if (mappingPath === "FormInput") continue; // handled via pdfDataMapping already
+            unified[field.name] = resolveContextPath(mappingPath, unified);
           }
 
           const compiled = Handlebars.compile(htmlSource);
@@ -308,7 +311,14 @@ export async function generateSubmissionPdf(id: string): Promise<{ buffer: Buffe
           let sigIndex = 0;
 
           for (const field of pdfTemplate.fields as any[]) {
+            const mappingPath = globalTemplateMappings[field.name] || field.mappingPath;
             let val = pdfDataMapping[field.name];
+            
+            if (!val && mappingPath && mappingPath !== "FormInput") {
+              const unified = await buildUnifiedContext(submission, pdfDataMapping);
+              val = resolveContextPath(mappingPath, unified);
+            }
+            
             if (field.type === "signature") { val = signatureValues[sigIndex]; sigIndex++; }
             if (!val) continue;
 
@@ -538,12 +548,14 @@ export async function generateContractPdf(contractRequestId: string, drawnSignat
   if (!fileData || !fileData.buffer) return null;
   const htmlSource = fileData.buffer.toString("utf-8");
 
+  const globalTemplateMappings = (contract.submission.template as any)?.templateMappings || {};
   const unified = await buildUnifiedContext(contract.submission, {});
   // Resolve mapped fields
   for (const field of (pdfTemplate as any).fields || []) {
-    if (!field.mappingPath) continue;
-    if (field.mappingPath === "FormInput") continue;
-    unified[field.name] = resolveContextPath(field.mappingPath, unified);
+    const mappingPath = globalTemplateMappings[field.name] || field.mappingPath;
+    if (!mappingPath) continue;
+    if (mappingPath === "FormInput") continue;
+    unified[field.name] = resolveContextPath(mappingPath, unified);
   }
 
   const activeSignature = drawnSignatureBase64 || contract.externalSignature || contract.internalSignature || "";
@@ -579,3 +591,60 @@ export async function generateContractPdf(contractRequestId: string, drawnSignat
   return { buffer: Buffer.from(pdfBuffer), filename };
 }
 
+export async function generateDynamicContractPdf(submissionId: string, templateId: string, fieldName: string) {
+  const submission = await prisma.formSubmission.findUnique({
+    where: { id: submissionId },
+    include: {
+      submittedBy: true,
+      template: { include: { pdfTemplate: true } },
+      signatories: true
+    }
+  });
+
+  if (!submission) return null;
+
+  const pdfTemplate = await prisma.pdfTemplate.findUnique({
+    where: { id: templateId },
+    include: { fields: true }
+  });
+
+  if (!pdfTemplate || pdfTemplate.type !== "html" || !pdfTemplate.sharepointPath) {
+    return null;
+  }
+
+  const fileData = await downloadFromSharePoint(pdfTemplate.sharepointPath);
+  if (!fileData || !fileData.buffer) return null;
+  const htmlSource = fileData.buffer.toString("utf-8");
+
+  // Extract templateMappings for this specific generated_contract field
+  let fieldTemplateMappings: Record<string, string> = {};
+  const formFields = (submission.template as any)?.fields || [];
+  for (const f of formFields) {
+    if (f.label === fieldName && f.templateMappings) {
+      fieldTemplateMappings = f.templateMappings;
+      break;
+    }
+  }
+
+  const unified = await buildUnifiedContext(submission, {});
+  // Resolve mapped fields
+  for (const field of (pdfTemplate as any).fields || []) {
+    const mappingPath = fieldTemplateMappings[field.name] || field.mappingPath;
+    if (!mappingPath) continue;
+    if (mappingPath === "FormInput") continue;
+    unified[field.name] = resolveContextPath(mappingPath, unified);
+  }
+
+  const compiled = Handlebars.compile(htmlSource);
+  const html = compiled(unified);
+
+  const browser = await launchBrowser();
+
+  const page = await browser.newPage();
+  await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 15_000 });
+  const pdfBuffer = await page.pdf({ format: "A4", printBackground: true });
+  await browser.close();
+
+  const filename = `${submission.formName.replace(/[^a-zA-Z0-9]/g, "_")}_${fieldName.replace(/[^a-zA-Z0-9]/g, "_")}_${submission.reference || submission.id.slice(-6)}.pdf`;
+  return { buffer: Buffer.from(pdfBuffer), filename };
+}

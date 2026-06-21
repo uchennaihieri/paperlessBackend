@@ -261,13 +261,22 @@ export async function checkAndUnblockPrerequisites(completedSubmissionId?: strin
 // Returns submission items in the authenticated user's signing queue
 router.get("/queue", async (req: AuthRequest, res: Response) => {
   const email = req.user?.email ?? null;
-  if (!email) { res.json({ success: true, data: [] }); return; }
+  const userId = Number(req.user?.id);
+  if (!email || !userId) { res.json({ success: true, data: [] }); return; }
 
-  const [normalItems, finalApprovalItems, prerequisiteItems] = await Promise.all([
+  // 1. Fetch active delegations where this user is the delegate
+  const activeDelegations = await prisma.userDelegation.findMany({
+    where: { delegateUserId: userId, status: "Active" },
+    include: { originalUser: true }
+  });
+  const delegatorEmails = activeDelegations.map((d: any) => d.originalUser.finca_email).filter(Boolean) as string[];
+  const targetEmails = [email, ...delegatorEmails];
+
+  const [normalItems, finalApprovalItems, prerequisiteItems, pendingDelegations] = await Promise.all([
     prisma.formSubmission.findMany({
       where: {
         signatories: {
-          some: { email: { equals: email, mode: "insensitive" }, status: "Pending" },
+          some: { email: { in: targetEmails, mode: "insensitive" }, status: "Pending" },
         },
         status: { not: "Awaiting Final Approval" },
       },
@@ -288,7 +297,7 @@ router.get("/queue", async (req: AuthRequest, res: Response) => {
     prisma.formSubmission.findMany({
       where: {
         status: "Awaiting Final Approval",
-        approverEmail: { equals: email, mode: "insensitive" },
+        approverEmail: { in: targetEmails, mode: "insensitive" },
       },
       include: {
         signatories: { orderBy: { position: "asc" } },
@@ -306,7 +315,7 @@ router.get("/queue", async (req: AuthRequest, res: Response) => {
     }),
     prisma.submissionPrerequisite.findMany({
       where: {
-        targetEmail: { equals: email, mode: "insensitive" },
+        targetEmail: { in: targetEmails, mode: "insensitive" },
         status: "Active",
       },
       include: {
@@ -324,12 +333,17 @@ router.get("/queue", async (req: AuthRequest, res: Response) => {
       },
       orderBy: { id: "desc" }
     }),
+    prisma.userDelegation.findMany({
+      where: { delegateUserId: userId, status: "Pending" },
+      include: { originalUser: { select: { user_name: true, finca_email: true } } },
+      orderBy: { createdAt: "desc" }
+    })
   ]);
 
   // Filter sequential-signing eligibility
   const eligible = normalItems.filter((sub: any) => {
     const myRow = sub.signatories.find(
-      (s: any) => s.email.toLowerCase() === email.toLowerCase()
+      (s: any) => targetEmails.some(t => t.toLowerCase() === s.email.toLowerCase())
     );
     if (!myRow || myRow.status !== "Pending") return false;
     if (sub.signingType === "parallel") return true;
@@ -339,8 +353,8 @@ router.get("/queue", async (req: AuthRequest, res: Response) => {
   });
 
   const prereqMappedItems = prerequisiteItems
-    .filter(p => p.prereqSubmission !== null || p.type === "CONTRACT")
-    .map(p => {
+    .filter((p: any) => p.prereqSubmission !== null || p.type === "CONTRACT")
+    .map((p: any) => {
       if (p.type === "CONTRACT") {
         return {
           id: p.id,
@@ -369,7 +383,18 @@ router.get("/queue", async (req: AuthRequest, res: Response) => {
       };
     });
 
-  res.json({ success: true, data: [...eligible, ...finalApprovalItems, ...prereqMappedItems] });
+  const mappedDelegations = pendingDelegations.map((d: any) => ({
+    id: d.id,
+    type: "DELEGATION_REQUEST",
+    formName: "Delegation Request",
+    reference: `SWAP-${d.id.substring(0, 5).toUpperCase()}`,
+    status: "Pending",
+    createdAt: d.createdAt,
+    submittedBy: d.originalUser,
+    isDelegationRequest: true,
+  }));
+
+  res.json({ success: true, data: [...eligible, ...finalApprovalItems, ...prereqMappedItems, ...mappedDelegations] });
 });
 
 // ── GET /api/v1/workflow/search-users ─────────────────────────────────────────
@@ -384,7 +409,7 @@ router.get("/search-users", async (req, res: Response) => {
         { finca_email: { contains: query, mode: "insensitive" } },
       ],
     },
-    select: { user_name: true, finca_email: true },
+    select: { id: true, user_name: true, finca_email: true },
     take: 10,
     distinct: ["finca_email"],
   });
@@ -915,10 +940,17 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
     return;
   }
 
+  const activeDelegations = await prisma.userDelegation.findMany({
+    where: { delegateUserId: Number(req.user?.id), status: "Active" },
+    include: { originalUser: true }
+  });
+  const delegatorEmails = activeDelegations.map((d: any) => d.originalUser.finca_email).filter(Boolean) as string[];
+  const targetEmails = [email, ...delegatorEmails];
+
   const sigRow = await prisma.submissionSignatory.findFirst({
     where: {
       submissionId: req.params.id,
-      email: { equals: email, mode: "insensitive" },
+      email: { in: targetEmails, mode: "insensitive" },
       status: "Pending",
     },
   });
@@ -928,12 +960,28 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
     return;
   }
 
+  const signerUser = await prisma.user.findFirst({
+    where: { finca_email: { equals: email!, mode: "insensitive" } },
+    select: { user_name: true },
+  });
+  const signerName = signerUser?.user_name ?? email;
+
+  let updatedUserName = sigRow.userName;
+  let updatedEmail = sigRow.email;
+
+  if (sigRow.email.toLowerCase() !== email!.toLowerCase()) {
+    updatedUserName = `${signerName} (on behalf of ${sigRow.userName})`;
+    updatedEmail = email!;
+  }
+
   await prisma.submissionSignatory.update({
     where: { id: sigRow.id },
     data: { 
       status: "Signed", 
       signedAt: new Date(), 
       signatureData: finalSignatureData,
+      userName: updatedUserName,
+      email: updatedEmail
     },
   });
 
@@ -959,11 +1007,7 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
     },
   });
 
-  const signerUser = await prisma.user.findFirst({
-    where: { finca_email: { equals: email!, mode: "insensitive" } },
-    select: { user_name: true },
-  });
-  const signerName = signerUser?.user_name ?? email;
+  // Signer name is already determined above as signerName
 
   // If there's no treater branch configured, skip "Processing" and go straight to "Completed"
   const isMasterRoster = currentForSign?.formName?.startsWith("Master Roster:");
@@ -1009,7 +1053,7 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
     const fields = typeof currentForSign.template.fields === "string" 
       ? JSON.parse(currentForSign.template.fields) : currentForSign.template.fields;
     for (const f of fields) {
-      if (f.type === "signable_document") {
+      if (f.type === "signable_document" || f.type === "generated_contract") {
         hasSignableDocument = true;
         signableFieldLabel = f.label;
         break;

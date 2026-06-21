@@ -39,7 +39,23 @@ model User {
   notificationPreferences Json?
   Event                   Event[]
 
+  // Delegations
+  delegationsGiven        UserDelegation[] @relation("Delegator")
+  delegationsReceived     UserDelegation[] @relation("Delegatee")
+
   @@map("users")
+}
+
+model UserDelegation {
+  id              String   @id @default(cuid())
+  originalUserId  Int
+  originalUser    User     @relation("Delegator", fields: [originalUserId], references: [id], onDelete: Cascade)
+  delegateUserId  Int
+  delegateUser    User     @relation("Delegatee", fields: [delegateUserId], references: [id], onDelete: Cascade)
+  status          String   @default("Pending") // Pending, Active, Declined, Reverted
+  initiatedBy     String   @default("User")    // "User" or "Admin"
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 }
 
 model FormTemplate {
@@ -58,6 +74,7 @@ model FormTemplate {
   generatesExcel         Boolean                  @default(false)
   pdfTemplateId          String?
   pdfTemplate            PdfTemplate?             @relation(fields: [pdfTemplateId], references: [id])
+  templateMappings       Json?
   needsContract          Boolean                  @default(false)
   contractTemplateId     String?
   automatedSignatories   Json? // Array of {branch, role, signingType}
@@ -241,6 +258,7 @@ model PdfTemplate {
   name           String             @unique
   type           String             @default("document") // "document" | "html"
   sharepointPath String
+  availableFor   String[]           @default(["forms"]) // "forms", "contracts", "events"
   createdAt      DateTime           @default(now())
   updatedAt      DateTime           @updatedAt
   fields         PdfTemplateField[]
@@ -497,6 +515,7 @@ model Event {
 
   pdfTemplateId String?
   pdfTemplate   PdfTemplate? @relation(fields: [pdfTemplateId], references: [id])
+  templateMappings Json?
 
   documentUrl String?
 

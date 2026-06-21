@@ -111,13 +111,59 @@ router.get("/action-items", async (req: AuthRequest, res: Response) => {
     });
   }
 
+  // Fetch active delegations for the current user
+  const activeDelegations = await prisma.userDelegation.findMany({
+    where: { delegateUserId: Number(req.user?.id), status: "Active" },
+    include: { originalUser: true }
+  });
+
+  const branchRoleConditions: any[] = [];
+
+  // 1. Current user's branch/role
+  branchRoleConditions.push({
+    AND: [
+      { template: { formTreater: { equals: userBranch, mode: "insensitive" as const } } },
+      {
+        OR: [
+          { template: { formTreaterRole: null } },
+          { template: { formTreaterRole: "" } },
+          { template: { formTreaterRole: { equals: req.user?.user_role, mode: "insensitive" as const } } }
+        ]
+      }
+    ]
+  });
+
+  // 2. Delegatees' branch/role
+  for (const del of activeDelegations) {
+    if (del.originalUser.branch) {
+      branchRoleConditions.push({
+        AND: [
+          { template: { formTreater: { equals: del.originalUser.branch, mode: "insensitive" as const } } },
+          {
+            OR: [
+              { template: { formTreaterRole: null } },
+              { template: { formTreaterRole: "" } },
+              { template: { formTreaterRole: { equals: del.originalUser.user_role, mode: "insensitive" as const } } }
+            ]
+          }
+        ]
+      });
+    }
+  }
+
   const items = await prisma.formSubmission.findMany({
     where: {
-      OR: [
-        { status: { in: ["Processing", "Filed"] } },
-        { status: { startsWith: "Assigned" } },
-      ],
-      template: { formTreater: { equals: userBranch, mode: "insensitive" } },
+      AND: [
+        {
+          OR: [
+            { status: { in: ["Processing", "Filed"] } },
+            { status: { startsWith: "Assigned" } },
+          ],
+        },
+        {
+          OR: branchRoleConditions
+        }
+      ]
     },
     include: {
       template: { select: { name: true, formOwner: true, formTreater: true, fields: true } },
@@ -358,15 +404,100 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
   const template = await prisma.formTemplate.findUnique({ where: { id: templateId } });
   const templateFields: any[] = typeof template?.fields === "string"
     ? JSON.parse(template.fields) : (template?.fields ?? []);
+
+  // Force hidden fields to their default values (security layer)
+  for (const field of templateFields) {
+    if (field.isHidden && field.defaultValue !== undefined) {
+      formResponses[field.label] = field.defaultValue;
+    }
+  }
+
+  // ── Cross-form Data Referencing for Prerequisites ──────────────────────────
+  if (draftId) {
+    let mainSubmissionId: string | null = null;
+    let fetchedMainSubmission: any = null;
+    let fetchedPrereqs: any[] | null = null;
+
+    for (const field of templateFields) {
+      if (field.description) {
+        const match = field.description.match(/View Referenced "(MainForm|Prerequisite\.\d+)\.(.+?)"/i);
+        if (match) {
+          const targetType = match[1]; // e.g. "MainForm" or "Prerequisite.1"
+          const targetLabel = match[2];
+
+          // Lazy load the prerequisite root context
+          if (mainSubmissionId === null) {
+            const selfPrereq = await prisma.submissionPrerequisite.findUnique({
+              where: { prereqSubmissionId: draftId }
+            });
+            if (selfPrereq) {
+              mainSubmissionId = selfPrereq.mainSubmissionId;
+            } else {
+              mainSubmissionId = "NONE"; // Mark to avoid re-querying
+            }
+          }
+
+          if (mainSubmissionId && mainSubmissionId !== "NONE") {
+            let targetFormResponses: any = null;
+
+            if (targetType.toLowerCase() === "mainform") {
+              if (!fetchedMainSubmission) {
+                fetchedMainSubmission = await prisma.formSubmission.findUnique({
+                  where: { id: mainSubmissionId }
+                });
+              }
+              if (fetchedMainSubmission) {
+                targetFormResponses = typeof fetchedMainSubmission.formResponses === "string" 
+                  ? JSON.parse(fetchedMainSubmission.formResponses) 
+                  : fetchedMainSubmission.formResponses;
+              }
+            } else {
+              const orderMatch = targetType.match(/Prerequisite\.(\d+)/i);
+              if (orderMatch) {
+                const targetOrder = parseInt(orderMatch[1], 10);
+                if (!fetchedPrereqs) {
+                  fetchedPrereqs = await prisma.submissionPrerequisite.findMany({
+                    where: { mainSubmissionId },
+                    include: { prereqSubmission: true }
+                  });
+                }
+                const targetPrereq = fetchedPrereqs.find(p => p.order === targetOrder);
+                if (targetPrereq && targetPrereq.prereqSubmission) {
+                  targetFormResponses = typeof targetPrereq.prereqSubmission.formResponses === "string"
+                    ? JSON.parse(targetPrereq.prereqSubmission.formResponses)
+                    : targetPrereq.prereqSubmission.formResponses;
+                }
+              }
+            }
+
+            // If we successfully found the value, inject it
+            if (targetFormResponses && targetFormResponses[targetLabel] !== undefined) {
+              formResponses[field.label] = targetFormResponses[targetLabel];
+            }
+          }
+        }
+      }
+    }
+  }
   
   let hasSignableDocument = false;
   let signableDocumentFieldLabel = "";
+  let initiatorNeedsToSign = false;
+  const generatedContractFields: any[] = [];
+  
   for (const field of templateFields) {
-    if (field.type === "signable_document") {
+    if (field.type === "signable_document" || field.type === "generated_contract") {
       hasSignableDocument = true;
-      signableDocumentFieldLabel = field.label;
+      if (field.type === "signable_document") {
+        signableDocumentFieldLabel = field.label;
+      }
+      if (field.type === "generated_contract") {
+        generatedContractFields.push(field);
+      }
+      if (field.initiatorNeedsToSign) {
+        initiatorNeedsToSign = true;
+      }
       signingType = "sequential"; // Force sequential signing for free-form PDF signing
-      break;
     }
   }
 
@@ -379,9 +510,11 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
     // If the frontend already verified the token or used draw/upload and provides a direct base64 string
     const userEmail = req.user?.email;
     if (!userEmail) { res.status(401).json({ success: false, error: "Not logged in", code: "NOT_LOGGED_IN" }); return; }
-    finalSignatureData = initiatorSignature;
-    finalSignatureStatus = "Signed";
-    finalSignedAt = new Date();
+    if (!initiatorNeedsToSign) {
+      finalSignatureData = initiatorSignature;
+      finalSignatureStatus = "Signed";
+      finalSignedAt = new Date();
+    }
   } else if (initiatorToken) {
     const userEmail = req.user?.email;
     if (!userEmail) { res.status(401).json({ success: false, error: "Not logged in", code: "NOT_LOGGED_IN" }); return; }
@@ -393,9 +526,11 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
       res.status(400).json({ success: false, error: "Invalid signature token.", code: "INVALID_SIGNATURE_TOKEN" });
       return;
     }
-    finalSignatureData = decrypt(secData.encryptedSignature);
-    finalSignatureStatus = "Signed";
-    finalSignedAt = new Date();
+    if (!initiatorNeedsToSign) {
+      finalSignatureData = decrypt(secData.encryptedSignature);
+      finalSignatureStatus = "Signed";
+      finalSignedAt = new Date();
+    }
   }
 
   // ── Generate reference number (if not a draft) ──────────────────────────────
@@ -723,6 +858,33 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
       },
       include: { signatories: true },
     });
+  }
+
+  // ── Queue Dynamic Contract PDFs to Background Worker ──────────────────────
+  if (generatedContractFields.length > 0) {
+    for (const field of generatedContractFields) {
+      if (!field.contractTemplateId) continue;
+      
+      try {
+        await prisma.pdfJobQueue.create({
+          data: {
+            sourceSubmissionId: submission.id,
+            jobType: "DynamicContract",
+            targetFieldName: field.label,
+          }
+        });
+        
+        if (!updatedResponses[field.label]) updatedResponses[field.label] = [];
+        (updatedResponses[field.label] as any[]).push({
+          isAttachment: true,
+          name: "Contract Document",
+          url: "__generating_pdf__"
+        });
+        console.info(`[pdf] Queued Dynamic Contract PDF generation for field ${field.label}`);
+      } catch (err) {
+        console.error(`[pdf] Failed to queue dynamic contract PDF for field ${field.label}:`, err);
+      }
+    }
   }
 
   if (requestToken) {

@@ -21,6 +21,7 @@ async function processJob(job: {
 }): Promise<void> {
   const submission = await prisma.formSubmission.findUnique({
     where: { id: job.sourceSubmissionId },
+    include: { template: true }
   });
 
   if (!submission) {
@@ -34,6 +35,23 @@ async function processJob(job: {
   let pdfResult;
   if (job.jobType === "Contract" && job.targetSubmissionId) {
     pdfResult = await generateContractPdf(job.targetSubmissionId);
+  } else if (job.jobType === "DynamicContract" && job.targetFieldName) {
+    const templateFields = typeof submission.template?.fields === "string" 
+      ? JSON.parse(submission.template.fields) 
+      : (submission.template?.fields || []);
+    
+    const field = templateFields.find((f: any) => f.label === job.targetFieldName);
+    const templateId = field?.contractTemplateId;
+
+    if (!templateId) {
+      await prisma.pdfJobQueue.update({
+        where: { id: job.id },
+        data: { status: "Failed", errorMsg: `Could not find contractTemplateId for field ${job.targetFieldName}` },
+      });
+      return;
+    }
+    const { generateDynamicContractPdf } = await import("./pdfGenerator");
+    pdfResult = await generateDynamicContractPdf(submission.id, templateId, job.targetFieldName);
   } else {
     pdfResult = await generateSubmissionPdf(job.sourceSubmissionId);
   }
@@ -92,7 +110,9 @@ async function processJob(job: {
 
   const fieldName = (isTargetJob && job.targetFieldName)
       ? job.targetFieldName
-      : "CompletedFormPDF";
+      : (job.jobType === "DynamicContract" && job.targetFieldName)
+        ? job.targetFieldName
+        : "CompletedFormPDF";
 
   // Create the document record
   const created = await prisma.submissionDocument.create({
@@ -118,7 +138,7 @@ async function processJob(job: {
   if (job.jobType === "Prerequisite" || job.jobType === "Contract") {
     // Prerequisite and Contract PDFs are tracked purely as SubmissionDocuments
     // No need to inject them into formResponses
-  } else if (job.jobType === "InternalForm") {
+  } else if (job.jobType === "InternalForm" || job.jobType === "DynamicContract") {
     const currentArr = Array.isArray(resData[fieldName]) ? resData[fieldName] : [];
     const pendingIndex = currentArr.findIndex((a: any) => a.url === "__generating_pdf__");
     const newAttachment = { isAttachment: true, name: pdfResult.filename, url: `/api/v1/file?docId=${created.id}` };
