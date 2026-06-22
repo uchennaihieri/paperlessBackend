@@ -537,3 +537,27 @@ model EventFacilitator {
   email String
   name  String
 }
+
+model UploadedDataset {
+  id              String           @id @default(cuid())
+  name            String
+  uploadedBy      String
+  sharedWith      String[]
+  status          String
+  runFirstCentral Boolean          @default(false)
+  runCreditRegistry Boolean        @default(false)
+  createdAt       DateTime         @default(now())
+  records         DatasetRecord[]
+}
+
+model DatasetRecord {
+  id                 String           @id @default(cuid())
+  datasetId          String
+  dataset            UploadedDataset  @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  reference          String           @unique
+  bvn                String?
+  rowData            Json
+  firstCentralRef    String?
+  creditRegistryRef  String?
+  processingStatus   String
+}
