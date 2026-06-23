@@ -110,7 +110,8 @@ router.get("/:id/records", authenticate, async (req: AuthRequest, res: any) => {
     }
 
     const records = await prisma.datasetRecord.findMany({
-      where: { datasetId: id }
+      where: { datasetId: id },
+      orderBy: { id: "asc" }
     });
     
     res.json({ success: true, data: records, dataset });

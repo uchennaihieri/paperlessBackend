@@ -48,6 +48,7 @@ import formRequestsRouter from "./routes/formRequests";
 import { eventsRouter } from "./routes/events";
 import delegationsRouter from "./routes/delegations";
 import datasetsRouter from "./routes/datasets";
+import crmRouter from "./routes/crm";
 
 const app = express();
 const PORT = process.env.PORT ?? 4000;
@@ -98,6 +99,7 @@ v1.use("/workflow", workflowRouter);
 v1.use("/security", securityRouter);
 v1.use("/teams", teamsRouter);
 v1.use("/upload", uploadRouter);
+v1.use("/crm", crmRouter);
 v1.use("/file", filesRouter);
 v1.use("/pdf", pdfRouter);
 v1.use("/mobile_send-otp", mobileSendOtpRouter);

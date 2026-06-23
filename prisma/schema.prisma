@@ -561,3 +561,15 @@ model DatasetRecord {
   creditRegistryRef  String?
   processingStatus   String
 }
+
+model CrmInteraction {
+  id              String   @id @default(cuid())
+  customerPhone   String
+  sourceType      String   // "FORM" or "UPLOADED_DATA"
+  sourceId        String
+  feedbackText    String   @db.Text
+  status          String
+  loggedByEmail   String
+  loggedByName    String   
+  createdAt       DateTime @default(now())
+}
