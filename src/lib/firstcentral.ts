@@ -105,14 +105,18 @@ export async function consumerMatchByBvn(
     throw new Error(`FirstCentral API error (${res.status}): ${txt}`);
   }
 
-  const raw: any = await res.json();
+  const rawText = await res.text();
+  logger.info(`FirstCentral ConsumerMatch RAW response: ${rawText}`);
+  const raw: any = JSON.parse(rawText);
 
-  // Normalise: the API returns [{"MatchedConsumer":[...]}]
-  const list: ConsumerMatchResult[] = Array.isArray(raw)
-    ? (raw[0]?.MatchedConsumer ?? raw[0]?.MatchedConsumers ?? raw)
-    : Array.isArray(raw?.MatchedConsumer)
-      ? raw.MatchedConsumer
-      : raw?.MatchedConsumers ?? [];
+  // FirstCentral returns an array of section objects, merge them into one object
+  const payload = Array.isArray(raw) ? raw.reduce((acc, curr) => Object.assign(acc, curr), {}) : raw;
+
+  const list: ConsumerMatchResult[] = Array.isArray(payload?.MatchedConsumer)
+    ? payload.MatchedConsumer
+    : Array.isArray(payload?.MatchedConsumers)
+      ? payload.MatchedConsumers
+      : Array.isArray(payload) ? payload : [];
 
   return { count: list.length, matched: list };
 }
@@ -153,9 +157,11 @@ export async function getConsumerDetailedCreditReport(opts: {
     throw new Error(`FirstCentral API error (${res.status}): ${txt}`);
   }
 
-  const raw: any = await res.json();
-  // Unwrap array wrapper if present
-  const payload = Array.isArray(raw) ? raw[0] : raw;
+  const rawText = await res.text();
+  logger.info(`FirstCentral RAW response 1: ${rawText}`);
+  const raw: any = JSON.parse(rawText);
+  // FirstCentral returns an array of section objects, merge them into one object
+  const payload = Array.isArray(raw) ? raw.reduce((acc, curr) => Object.assign(acc, curr), {}) : raw;
 
   // FirstCentral returns a {SubjectList:[...]} disambiguation page when
   // multiple consumers could match. Re-call with the merged consumerID list
@@ -173,7 +179,7 @@ export async function getConsumerDetailedCreditReport(opts: {
         EnquiryID: enquiryID,
         consumerMergeList: mergeList,
         SubscriberEnquiryEngineID: subscriberEnquiryEngineID,
-        // productid is NOT a valid field for /GetConsumerFullCreditReport
+        productid: productId,
       }),
     });
 
@@ -183,8 +189,10 @@ export async function getConsumerDetailedCreditReport(opts: {
       throw new Error(`FirstCentral API error (${res2.status}): ${txt}`);
     }
 
-    const raw2: any = await res2.json();
-    const payload2 = Array.isArray(raw2) ? raw2[0] : raw2;
+    const rawText2 = await res2.text();
+    logger.info(`FirstCentral RAW response 2: ${rawText2}`);
+    const raw2: any = JSON.parse(rawText2);
+    const payload2 = Array.isArray(raw2) ? raw2.reduce((acc, curr) => Object.assign(acc, curr), {}) : raw2;
     logger.info(`FirstCentral report (resolved) keys: ${JSON.stringify(Object.keys(payload2 ?? {}))}`);
     logger.info(`FirstCentral report (resolved) full: ${JSON.stringify(payload2)}`);
     return payload2;

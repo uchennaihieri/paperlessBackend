@@ -278,7 +278,7 @@ router.get("/queue", async (req: AuthRequest, res: Response) => {
         signatories: {
           some: { email: { in: targetEmails, mode: "insensitive" }, status: "Pending" },
         },
-        status: { not: "Awaiting Final Approval" },
+        status: { notIn: ["Awaiting Final Approval", "Rejected", "Not Approved", "Completed"] },
       },
       include: {
         signatories: { orderBy: { position: "asc" } },
@@ -920,7 +920,7 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
   const email = req.user?.email ?? null;
   if (!email) { res.status(401).json({ success: false, error: "Not authenticated.", code: "NOT_AUTHENTICATED" }); return; }
 
-  const { signatureData, signatureToken, annotations } = req.body;
+  const { signatureData, signatureToken, annotations, approvalComment } = req.body;
   let finalSignatureData: string | null = signatureData ?? null;
 
   if (signatureToken) {
@@ -981,7 +981,8 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
       signedAt: new Date(), 
       signatureData: finalSignatureData,
       userName: updatedUserName,
-      email: updatedEmail
+      email: updatedEmail,
+      approvalComment: approvalComment?.trim() || null
     },
   });
 

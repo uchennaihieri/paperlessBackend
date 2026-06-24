@@ -95,6 +95,11 @@ async function buildUnifiedContext(submission: any, pdfDataMapping: Record<strin
 
   const submitter = submission.submittedBy as any;
 
+  // For public form submissions, submittedBy is null — use publicSubmitter fields
+  const resolvedSubmitterName   = submitter?.user_name  ?? submitter?.full_name ?? (submission as any).publicSubmitterName ?? "";
+  const resolvedSubmitterEmail  = submitter?.finca_email ?? submitter?.email     ?? (submission as any).publicSubmitterEmail ?? "";
+  const resolvedSubmitterBranch = submitter?.branch ?? "";
+
   // Fetch approved prerequisites and their forms
   const prereqs = await prisma.submissionPrerequisite.findMany({
     where: { mainSubmissionId: submission.id, status: "Approved" },
@@ -183,9 +188,9 @@ async function buildUnifiedContext(submission: any, pdfDataMapping: Record<strin
       dateSubmitted: new Date(submission.createdAt).toLocaleDateString("en-GB"),
       dateTime:      new Date(submission.createdAt).toLocaleString(),
       submitter: {
-        name:   submitter?.user_name  ?? submitter?.full_name ?? "",
-        email:  submitter?.finca_email ?? submitter?.email ?? "",
-        branch: submitter?.branch ?? "",
+        name:   resolvedSubmitterName,
+        email:  resolvedSubmitterEmail,
+        branch: resolvedSubmitterBranch,
       },
       DateNow,
       TimeNow,
@@ -206,9 +211,9 @@ async function buildUnifiedContext(submission: any, pdfDataMapping: Record<strin
     formDate:       new Date(submission.createdAt).toLocaleDateString("en-GB"),
     dateSubmitted:  new Date(submission.createdAt).toLocaleString(),
     reference:      submission.reference ?? "",
-    submittedBy:    submitter?.user_name ?? "",
-    submitterEmail: submitter?.finca_email ?? "",
-    submitterBranch:submitter?.branch ?? "",
+    submittedBy:    resolvedSubmitterName,
+    submitterEmail: resolvedSubmitterEmail,
+    submitterBranch:resolvedSubmitterBranch,
     questions:      Questions,
     // `responses` as [{question, answer}] — matches templates using {{#each responses}}{{this.question}}
     responses:      Questions.map((q) => ({ question: q.label, answer: q.value })),
@@ -447,6 +452,11 @@ export async function generateSubmissionPdf(id: string): Promise<{ buffer: Buffe
             <div class="info-item">
               <h4>Date Submitted</h4>
               <div>${new Date(submission.createdAt).toLocaleString()}</div>
+            </div>
+            <div class="info-item">
+              <h4>Submitted By</h4>
+              <div>${(submission.submittedBy as any)?.user_name ?? (submission as any).publicSubmitterName ?? "N/A"}</div>
+              <div style="color:#666;font-size:12px;">${(submission.submittedBy as any)?.finca_email ?? (submission as any).publicSubmitterEmail ?? ""}</div>
             </div>
             <div class="info-item">
               <h4>Form Treater</h4>

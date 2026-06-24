@@ -319,13 +319,38 @@ router.delete("/:id", requireAdmin as any, async (req, res: Response) => {
   }
 });
 // ── POST /api/v1/forms/:id/toggle-public ──────────────────────────────────────
-router.post("/:id/toggle-public", requireAdmin as any, async (req: AuthRequest, res: Response) => {
+router.post("/:id/toggle-public", async (req: AuthRequest, res: Response) => {
   const { isPublic } = req.body;
   try {
     const template = await prisma.formTemplate.findUnique({ where: { id: req.params.id } });
     if (!template) {
       res.status(404).json({ success: false, error: "Form template not found", code: "FORM_TEMPLATE_NOT_FOUND" });
       return;
+    }
+
+    const userRole = (req.user?.user_role ?? "").toLowerCase();
+    const specialAccess = (req.user?.specialAccess ?? "").toLowerCase();
+    const isAdmin = userRole === "administrator" || userRole === "admin" || userRole === "superadmin" || specialAccess.includes("administrator");
+    const email = req.user?.email?.toLowerCase() ?? "";
+
+    if (!isAdmin) {
+      const branch = req.user?.branch ?? "";
+      if (branch && template.formOwner === branch) {
+        // Access granted
+      } else {
+        const access = await prisma.formAccess.findUnique({
+          where: {
+            templateId_userEmail: {
+              templateId: req.params.id,
+              userEmail: email,
+            }
+          }
+        });
+        if (!access) {
+          res.status(403).json({ success: false, error: "You do not have permission to toggle public access for this form.", code: "YOU_DO_NOT_HAVE_PERMISSION_TO_" });
+          return;
+        }
+      }
     }
 
     let slug = template.publicSlug;

@@ -8,191 +8,171 @@ datasource db {
 }
 
 model User {
-  id              Int       @id @default(autoincrement())
-  branch          String?   @db.VarChar(100)
-  login_id        String?   @db.VarChar(50)
-  user_no         String?   @db.VarChar(50)
-  user_role       String?   @db.VarChar(50)
-  employee_id     String?   @db.VarChar(50)
-  user_name       String?   @db.VarChar(150)
-  finca_email     String?   @db.VarChar(150)
-  lock_flag       Boolean?
-  effective_date  DateTime? @db.Date
-  customer_number String?   @db.VarChar(50)
-  creation_date   DateTime? @default(now()) @db.Timestamp()
-  created_by      String?   @db.VarChar(50)
-  status          String?   @db.VarChar(20)
-
-  // Auth fields
-  passwordHash      String? // bcrypt hash of the user's password
-  mustResetPassword Boolean   @default(true) // true on first login
-  passwordChangedAt DateTime? // set on every password change; JWTs issued before this are rejected
-  resetAttempts     Int       @default(0) // tracks failed password reset attempts
-
-  // Access fields
-  specialAccess String? @db.VarChar(100) // e.g. "None", "Administrator", "Accountant", or custom
-
-  // System added fields
+  id                      Int                  @id @default(autoincrement())
+  branch                  String?              @db.VarChar(100)
+  login_id                String?              @db.VarChar(50)
+  user_no                 String?              @db.VarChar(50)
+  user_role               String?              @db.VarChar(50)
+  employee_id             String?              @db.VarChar(50)
+  user_name               String?              @db.VarChar(150)
+  finca_email             String?              @db.VarChar(150)
+  lock_flag               Boolean?
+  effective_date          DateTime?            @db.Date
+  customer_number         String?              @db.VarChar(50)
+  creation_date           DateTime?            @default(now()) @db.Timestamp(6)
+  created_by              String?              @db.VarChar(50)
+  status                  String?              @db.VarChar(20)
   signature               String?
-  submissions             FormSubmission[]
-  devices                 DeviceRegistration[]
+  mustResetPassword       Boolean              @default(true)
+  passwordHash            String?
+  passwordChangedAt       DateTime?
+  specialAccess           String?              @db.VarChar(100)
   notificationPreferences Json?
+  resetAttempts           Int                  @default(0)
   Event                   Event[]
-
-  // Delegations
-  delegationsGiven        UserDelegation[] @relation("Delegator")
-  delegationsReceived     UserDelegation[] @relation("Delegatee")
+  submissions             FormSubmission[]
+  delegationsReceived     UserDelegation[]     @relation("Delegatee")
+  delegationsGiven        UserDelegation[]     @relation("Delegator")
+  devices                 DeviceRegistration[]
 
   @@map("users")
 }
 
 model UserDelegation {
-  id              String   @id @default(cuid())
-  originalUserId  Int
-  originalUser    User     @relation("Delegator", fields: [originalUserId], references: [id], onDelete: Cascade)
-  delegateUserId  Int
-  delegateUser    User     @relation("Delegatee", fields: [delegateUserId], references: [id], onDelete: Cascade)
-  status          String   @default("Pending") // Pending, Active, Declined, Reverted
-  initiatedBy     String   @default("User")    // "User" or "Admin"
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id             String   @id @default(cuid())
+  originalUserId Int
+  delegateUserId Int
+  status         String   @default("Pending")
+  initiatedBy    String   @default("User")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  delegateUser   User     @relation("Delegatee", fields: [delegateUserId], references: [id], onDelete: Cascade)
+  originalUser   User     @relation("Delegator", fields: [originalUserId], references: [id], onDelete: Cascade)
 }
 
 model FormTemplate {
   id                     String                   @id @default(cuid())
   name                   String                   @unique
   description            String?
+  fields                 Json
+  createdAt              DateTime                 @default(now())
+  updatedAt              DateTime                 @updatedAt
+  formOwner              String?
+  formTreater            String?
+  htmlTemplate           String?
+  pdfGeneratorType       String                   @default("none")
+  pdfTemplateId          String?
   mobileEnabled          Boolean                  @default(false)
   accountServicesEnabled Boolean                  @default(false)
   isInternal             Boolean                  @default(false)
-  fields                 Json
-  htmlTemplate           String?                  @db.Text // Store the raw HTML string template
-  formOwner              String? // The branch that owns/creates this form
-  formTreater            String? // The branch responsible for treating/processing this form
-  formTreaterRole        String? // The role responsible for treating/processing this form
-  pdfGeneratorType       String                   @default("none") // "none", "document", "html"
-  generatesExcel         Boolean                  @default(false)
-  pdfTemplateId          String?
-  pdfTemplate            PdfTemplate?             @relation(fields: [pdfTemplateId], references: [id])
-  templateMappings       Json?
-  needsContract          Boolean                  @default(false)
   contractTemplateId     String?
-  automatedSignatories   Json? // Array of {branch, role, signingType}
-  automatedSigningType   String? // "sequential" | "parallel"
-  createdAt              DateTime                 @default(now())
-  updatedAt              DateTime                 @updatedAt
-  submissions            FormSubmission[]
-  prerequisiteFor        SubmissionPrerequisite[]
-  formAccess             FormAccess[]
+  needsContract          Boolean                  @default(false)
+  generatesExcel         Boolean                  @default(false)
+  formTreaterRole        String?
+  automatedSignatories   Json?
+  automatedSigningType   String?
   isPublic               Boolean                  @default(false)
   publicSlug             String?                  @unique
+  templateMappings       Json?
   requestBatches         FormRequestBatch[]
+  submissions            FormSubmission[]
+  pdfTemplate            PdfTemplate?             @relation(fields: [pdfTemplateId], references: [id])
+  prerequisiteFor        SubmissionPrerequisite[]
+  formAccess             FormAccess[]
 }
 
-// Main form submission record
 model FormSubmission {
   id                   String                   @id @default(cuid())
-  reference            String?                  @unique
-  alias                String?
   formName             String
-  status               String                   @default("Submitted") // Submitted, In-review, Processing, Awaiting Final Approval, Completed, Rejected
-  formResponses        Json // The actual field answers
-  signingType          String                   @default("sequential") // sequential | parallel
-  treatedBy            String? // Name of the officer who assigned to self and treated
-  treaterEmail         String? // Email of the officer who assigned to self and treated
-  approvedBy           String? // Display name of final approver, or "None"
-  approverEmail        String? // Email used to route to approver's queue
+  status               String                   @default("Submitted")
+  formResponses        Json
   submittedById        Int?
-  submittedBy          User?                    @relation(fields: [submittedById], references: [id])
   templateId           String
-  template             FormTemplate             @relation(fields: [templateId], references: [id], onDelete: Cascade)
-  signatories          SubmissionSignatory[]
-  documents            SubmissionDocument[]
-  auditTrail           FormAuditTrail[]
-  prerequisites        SubmissionPrerequisite[] @relation("MainSubmission")
-  prerequisiteFor      SubmissionPrerequisite?  @relation("PrereqSubmission")
-  contractRequests     ContractRequest[]
-  requestBatchId       String?
-  publicSubmitterEmail String?
-  publicSubmitterName  String?
-  eventAsMaster        Event?                   @relation("MasterSubmission")
   createdAt            DateTime                 @default(now())
   updatedAt            DateTime                 @updatedAt
+  signingType          String                   @default("sequential")
+  reference            String?                  @unique
+  approvedBy           String?
+  treatedBy            String?
+  approverEmail        String?
+  treaterEmail         String?
+  alias                String?
+  publicSubmitterEmail String?
+  publicSubmitterName  String?
+  requestBatchId       String?
+  eventAsMaster        Event?                   @relation("MasterSubmission")
+  submittedBy          User?                    @relation(fields: [submittedById], references: [id])
+  template             FormTemplate             @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  prerequisites        SubmissionPrerequisite[] @relation("MainSubmission")
+  prerequisiteFor      SubmissionPrerequisite?  @relation("PrereqSubmission")
+  signatories          SubmissionSignatory[]
+  contractRequests     ContractRequest[]
+  auditTrail           FormAuditTrail[]
+  documents            SubmissionDocument[]
 }
 
-// Audit trail — one record per status transition on any submission
 model FormAuditTrail {
   id            String         @id @default(cuid())
   submissionId  String
-  submission    FormSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
-  formReference String? // snapshot of submission.reference at time of event
+  formReference String?
   prevStatus    String
   newStatus     String
-  action        String // e.g. "signed", "declined", "assigned", "completed", "approved", "final_declined", "submitted"
-  actorName     String? // display name of the person who triggered the event
-  actorEmail    String? // email of the person who triggered the event
-  note          String? // optional context (e.g. decline reason, approver name routed to)
+  action        String
+  actorName     String?
+  actorEmail    String?
+  note          String?
   createdAt     DateTime       @default(now())
+  submission    FormSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
 
   @@map("form_audit_trail")
 }
 
-// Documents uploaded as part of a submission — organised by form / reference
 model SubmissionDocument {
   id           String         @id @default(cuid())
   submissionId String
-  submission   FormSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
-  fieldName    String // The form field label this file belongs to
-  originalName String // Original filename shown to users
-  filePath     String // SharePoint: "uploads/FORM/REF/file.ext" | Local: absolute path
+  fieldName    String
+  originalName String
+  filePath     String
   mimeType     String         @default("application/octet-stream")
   size         Int            @default(0)
   uploadedAt   DateTime       @default(now())
+  submission   FormSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
 
   @@map("submission_documents")
 }
 
-// Each signatory on a submission - ordered by position
 model SubmissionSignatory {
-  id             String         @id @default(cuid())
-  submissionId   String
-  submission     FormSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
-  position       Int // 1 = first to sign, 2 = second, etc.
-  userName       String
-  email          String
-  signedAt       DateTime?
-  signatureToken String?
-  signatureData  String?        @db.Text // Contains the base64 signature blob
-  annotations    Json? // Stores free-form signature/text coordinates
-  status         String         @default("Pending") // Pending, Signed, Declined
-  declineReason  String?        @db.Text // Optional reason given when declining
+  id              String         @id @default(cuid())
+  submissionId    String
+  position        Int
+  userName        String
+  email           String
+  signedAt        DateTime?
+  signatureToken  String?
+  status          String         @default("Pending")
+  signatureData   String?
+  declineReason   String?
+  annotations     Json?
+  approvalComment String?
+  submission      FormSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
 
   @@unique([submissionId, position])
 }
 
 model SubmissionPrerequisite {
-  id               String         @id @default(cuid())
-  mainSubmissionId String
-  mainSubmission   FormSubmission @relation("MainSubmission", fields: [mainSubmissionId], references: [id], onDelete: Cascade)
-
-  type String @default("FORM") // "FORM", "CONTRACT", "CHECK"
-
-  // For FORM
-  prereqSubmissionId String?         @unique // Populated when the prerequisite draft is created
-  prereqSubmission   FormSubmission? @relation("PrereqSubmission", fields: [prereqSubmissionId], references: [id], onDelete: SetNull)
-
-  targetFormId String? // The form template that must be filled
-  targetForm   FormTemplate? @relation(fields: [targetFormId], references: [id])
-
-  targetEmail String? // Email of the person required to fill it
-
-  // For CONTRACT
-  contractRequestId String?
-
-  order         Int     @default(1) // Determines execution sequence
-  declineReason String? @db.Text // Captures why they refused it
-
-  status String @default("Pending") // Pending, Active, Submitted, Approved, Declined
+  id                 String          @id @default(cuid())
+  mainSubmissionId   String
+  prereqSubmissionId String?         @unique
+  targetFormId       String?
+  targetEmail        String?
+  status             String          @default("Pending")
+  type               String          @default("FORM")
+  contractRequestId  String?
+  order              Int             @default(1)
+  declineReason      String?
+  mainSubmission     FormSubmission  @relation("MainSubmission", fields: [mainSubmissionId], references: [id], onDelete: Cascade)
+  prereqSubmission   FormSubmission? @relation("PrereqSubmission", fields: [prereqSubmissionId], references: [id])
+  targetForm         FormTemplate?   @relation(fields: [targetFormId], references: [id])
 
   @@index([mainSubmissionId])
 }
@@ -208,11 +188,11 @@ model VerificationToken {
 
 model SecurityData {
   id                 String   @id @default(cuid())
-  userEmail          String   @unique
   hashedToken        String
-  encryptedSignature String   @db.Text
+  encryptedSignature String
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
+  userEmail          String   @unique
 }
 
 model UploadedFile {
@@ -228,26 +208,25 @@ model UploadedFile {
 model Report {
   id             String         @id @default(cuid())
   name           String
-  description    String         @db.Text
-  reportType     String         @default("manual") // "manual" or "form"
-  formTemplateId String?
-  formStatuses   Json?
-  script         String?        @db.Text
-  createdBy      String // email of the Administrator who created it
+  description    String
+  script         String?
+  createdBy      String
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
+  formStatuses   Json?
+  formTemplateId String?
+  reportType     String         @default("manual")
   access         ReportAccess[]
 
   @@map("reports")
 }
 
-// Join table: which users have access to which reports
 model ReportAccess {
   id        String   @id @default(cuid())
   reportId  String
   userEmail String
-  report    Report   @relation(fields: [reportId], references: [id], onDelete: Cascade)
   grantedAt DateTime @default(now())
+  report    Report   @relation(fields: [reportId], references: [id], onDelete: Cascade)
 
   @@unique([reportId, userEmail])
   @@map("report_access")
@@ -256,14 +235,14 @@ model ReportAccess {
 model PdfTemplate {
   id             String             @id @default(cuid())
   name           String             @unique
-  type           String             @default("document") // "document" | "html"
   sharepointPath String
-  availableFor   String[]           @default(["forms"]) // "forms", "contracts", "events"
   createdAt      DateTime           @default(now())
   updatedAt      DateTime           @updatedAt
-  fields         PdfTemplateField[]
-  formTemplates  FormTemplate[]
+  type           String             @default("document")
+  availableFor   String[]           @default(["forms"])
   Event          Event[]
+  formTemplates  FormTemplate[]
+  fields         PdfTemplateField[]
 
   @@map("pdf_templates")
 }
@@ -271,72 +250,69 @@ model PdfTemplate {
 model PdfTemplateField {
   id          String      @id @default(cuid())
   templateId  String
-  template    PdfTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
   name        String
-  type        String // "text", "image", "signature", etc.
-  mappingPath String? // e.g. "submitterEmail" or "Metadata.formTitle". If null, acts as Form Input
+  type        String
   page        Int         @default(0)
-  x           Float // Normalized 0-1
-  y           Float // Normalized 0-1
-  width       Float // Normalized 0-1
-  height      Float // Normalized 0-1
+  x           Float
+  y           Float
+  width       Float
+  height      Float
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
+  mappingPath String?
+  template    PdfTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
 
   @@map("pdf_template_fields")
 }
 
-// Logs identity verification API responses to prevent multiple external API hits within 96 hours
 model IdentityVerificationLog {
   id           String   @id @default(cuid())
-  reference    String   @unique // e.g. "NIN001", "BVN003"
-  idType       String // "bvn" or "nin"
+  idType       String
   idNumber     String
-  subjectName  String   @default("") // firstname + lastname at time of check
-  status       String   @default("Verified") // "Verified" | "Failed" | "Partial"
-  pdfPath      String? // SharePoint path e.g. "checks/NIN/NIN001/report.pdf"
-  requestData  Json // the payload sent (firstname, lastname, etc.)
-  responseData Json // the QoreID response
-  verifiedBy   String // Email of the user who performed it
+  requestData  Json
+  responseData Json
+  verifiedBy   String
   createdAt    DateTime @default(now())
+  reference    String   @unique
+  status       String   @default("Verified")
+  subjectName  String   @default("")
+  pdfPath      String?
 
   @@index([idType, idNumber])
   @@index([idType])
   @@map("identity_verification_logs")
 }
 
-// Join table: which users have access to which form templates
 model FormAccess {
   id         String       @id @default(cuid())
   templateId String
   userEmail  String
-  template   FormTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
   grantedAt  DateTime     @default(now())
-  grantedBy  String // Email of the administrator who granted access
+  grantedBy  String
+  template   FormTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
 
   @@unique([templateId, userEmail])
   @@map("form_access")
 }
 
-// Global double-entry journal ledger
 model JournalEntry {
   id                String           @id @default(cuid())
-  entryId           String           @unique // "jv1", "jv2"... globally sequential
-  journalId         String?          @db.VarChar(50) // "JE1", "JE2"... grouping ID for saved lines
-  committed         Boolean          @default(false) // false = pending (not in global view), true = approved
-  sessionRef        String // Form reference number (e.g. "PCL1") — no FK, plain string
-  formName          String // Copied from form for display/search
-  type              String // "debit" | "credit"
+  entryId           String           @unique
+  committed         Boolean          @default(false)
+  sessionRef        String
+  formName          String
+  type              String
   accountCode       String
   accountName       String
   batchNumber       String?
   branch            String?
   description       String
   amount            Decimal          @db.Decimal(18, 2)
-  createdBy         String // Email of officer
+  createdBy         String
   date              DateTime         @default(now())
-  batchGroupId      String? // UUID shared across linked sessions (cross-form balancing)
-  uploadedJournalId String? // FK to UploadedJournal (set for entries created from an Excel upload)
+  batchGroupId      String?
+  journalId         String?          @db.VarChar(50)
+  uploadedJournalId String?
   uploadedJournal   UploadedJournal? @relation(fields: [uploadedJournalId], references: [id])
 
   @@index([sessionRef])
@@ -346,51 +322,47 @@ model JournalEntry {
   @@map("journal_entries")
 }
 
-// Device/system identifier registration — admin must approve before user can log in
 model DeviceRegistration {
   id           String    @id @default(cuid())
   userId       Int
-  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  deviceId     String // Client-generated unique identifier (UUID)
-  deviceName   String? // e.g. "Chrome on Windows 11" or "iPhone 14"
-  status       String    @default("Pending") // "Pending" | "Approved" | "Rejected"
-  approvedBy   String? // Email of admin who approved/rejected
+  deviceId     String
+  deviceName   String?
+  status       String    @default("Pending")
+  approvedBy   String?
   registeredAt DateTime  @default(now())
   approvedAt   DateTime?
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, deviceId])
   @@map("device_registrations")
 }
 
-// Persistent lookup values for dynamic dropdowns (roles, branches, special access)
-// Allows admins to type new values that persist for future use.
 model LookupValue {
   id        String   @id @default(cuid())
-  type      String   @db.VarChar(50) // "role" | "branch" | "specialAccess"
-  value     String   @db.VarChar(150) // The display value
+  type      String   @db.VarChar(50)
+  value     String   @db.VarChar(150)
   createdAt DateTime @default(now())
 
   @@unique([type, value])
   @@map("lookup_values")
 }
 
-// Credit Bureau check logs (FirstCentral, CreditRegistry…)
 model CreditBureauLog {
   id            String   @id @default(cuid())
-  reference     String   @unique // e.g. "FCB001", "CRB001"
-  bureau        String // "firstcentral" | "creditregistry"
+  reference     String   @unique
+  bureau        String
   bvn           String
-  subjectName   String   @default("") // best-match name from response
-  status        String   @default("Match Found") // "Match Found" | "No Match" | "Failed"
+  subjectName   String   @default("")
+  status        String   @default("Match Found")
   matchCount    Int      @default(0)
   enquiryReason String   @default("Credit Check")
   productId     Int      @default(45)
-  pdfPath       String? // SharePoint path for generated report
-  requestData   Json // inputs sent
-  responseData  Json // match API response
-  reportData    Json? // detailed credit report (fetched on demand)
-  verifiedBy    String // email of officer
+  pdfPath       String?
+  requestData   Json
+  responseData  Json
+  verifiedBy    String
   createdAt     DateTime @default(now())
+  reportData    Json?
 
   @@index([bureau])
   @@index([bvn])
@@ -401,7 +373,7 @@ model ReusableList {
   id          String   @id @default(cuid())
   name        String   @unique
   description String?
-  items       Json // Array of strings representing the options
+  items       Json
   createdBy   String
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -412,51 +384,48 @@ model ReusableList {
 model ContractRequest {
   id                     String         @id @default(cuid())
   submissionId           String
-  submission             FormSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
-  templateId             String // The HTML PDF template for the contract
+  templateId             String
   submitterEmail         String
-  status                 String         @default("Pending") // Pending, Signed
+  status                 String         @default("Pending")
   signedAt               DateTime?
   signatureToken         String?
-  internalSignature      String?        @db.Text
-  internalSignerJobTitle String?
-  pdfPath                String? // SharePoint path of the finalized, signed contract
+  pdfPath                String?
   createdAt              DateTime       @default(now())
-
-  externalSignerName  String?
-  externalSignerEmail String?
-  externalToken       String?   @unique
-  externalSignedAt    DateTime?
-  externalSignature   String?   @db.Text
+  internalSignature      String?
+  internalSignerJobTitle String?
+  externalSignerName     String?
+  externalSignerEmail    String?
+  externalToken          String?        @unique
+  externalSignedAt       DateTime?
+  externalSignature      String?
+  submission             FormSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
 
   @@map("contract_requests")
 }
 
 model AppVersion {
   id           String   @id @default(cuid())
-  version      String // e.g. "1.2.3"
-  downloadUrl  String // SharePoint or direct URL to the APK
-  releaseNotes String?  @db.Text
+  version      String
+  downloadUrl  String
+  releaseNotes String?
   publishedAt  DateTime @default(now())
-  publishedBy  String // email of admin who published
+  publishedBy  String
   updatedAt    DateTime @updatedAt
 
   @@map("app_versions")
 }
 
-// Uploaded Excel journal files — metadata stored here, file in SharePoint
 model UploadedJournal {
-  id               String   @id @default(cuid())
-  uploadId         String   @unique // "UJ1", "UJ2"... sequential human-readable ID
-  fileName         String // Original filename (e.g. "Q1_Journal.xlsx")
-  sharepointPath   String // Path in SharePoint (e.g. "uploads/journal-uploads/UJ1_Q1.xlsx")
-  totalDebit       Decimal  @db.Decimal(18, 2) // Manually entered by uploader
-  totalCredit      Decimal  @db.Decimal(18, 2) // Manually entered by uploader
-  uploadedBy       String // Email of the uploader
-  uploadedAt       DateTime @default(now())
-  linkedSessionRef String? // Form reference this upload is tied to (set by treater)
-
-  entries JournalEntry[]
+  id               String         @id @default(cuid())
+  uploadId         String         @unique
+  fileName         String
+  sharepointPath   String
+  totalDebit       Decimal        @db.Decimal(18, 2)
+  totalCredit      Decimal        @db.Decimal(18, 2)
+  uploadedBy       String
+  uploadedAt       DateTime       @default(now())
+  linkedSessionRef String?
+  entries          JournalEntry[]
 
   @@index([uploadedAt])
   @@index([linkedSessionRef])
@@ -464,112 +433,103 @@ model UploadedJournal {
 }
 
 model PdfJobQueue {
-  id                 String @id @default(uuid())
+  id                 String   @id @default(uuid())
   sourceSubmissionId String
-  jobType            String // "MainForm" or "InternalForm"
-
+  jobType            String
   targetSubmissionId String?
   targetFieldName    String?
-
-  status    String   @default("Pending") // "Pending", "Processing", "Completed", "Failed"
-  errorMsg  String?
-  attempts  Int      @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  status             String   @default("Pending")
+  errorMsg           String?
+  attempts           Int      @default(0)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   @@map("pdf_job_queue")
 }
 
 model FormRequestBatch {
-  id            String       @id @default(cuid())
+  id            String        @id @default(cuid())
   templateId    String
-  template      FormTemplate @relation(fields: [templateId], references: [id])
-  requestedBy   String // Email of the user who clicked 'Request Form Fill'
-  message       String?      @db.Text
+  requestedBy   String
+  message       String?
   prefilledData Json?
-  status        String       @default("Pending") // Pending, Partially Completed, Completed
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
-
-  requests FormRequest[]
+  status        String        @default("Pending")
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  requests      FormRequest[]
+  template      FormTemplate  @relation(fields: [templateId], references: [id])
 }
 
 model FormRequest {
   id           String           @id @default(cuid())
   batchId      String
-  batch        FormRequestBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
   targetEmail  String
   token        String           @unique
-  status       String           @default("Pending") // Pending, Completed
+  status       String           @default("Pending")
   submissionId String?
   completedAt  DateTime?
   createdAt    DateTime         @default(now())
+  batch        FormRequestBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
 }
 
 model Event {
-  id        String   @id @default(cuid())
-  reference String   @unique
-  name      String
-  startDate DateTime
-  endDate   DateTime
-
-  pdfTemplateId String?
-  pdfTemplate   PdfTemplate? @relation(fields: [pdfTemplateId], references: [id])
-  templateMappings Json?
-
-  documentUrl String?
-
-  createdById Int?
-  createdBy   User?    @relation(fields: [createdById], references: [id])
-  createdAt   DateTime @default(now())
-
-  masterSubmissionId String?         @unique
-  masterSubmission   FormSubmission? @relation("MasterSubmission", fields: [masterSubmissionId], references: [id])
-
-  facilitators EventFacilitator[]
+  id                 String             @id @default(cuid())
+  reference          String             @unique
+  name               String
+  startDate          DateTime
+  endDate            DateTime
+  pdfTemplateId      String?
+  documentUrl        String?
+  createdById        Int?
+  createdAt          DateTime           @default(now())
+  masterSubmissionId String?            @unique
+  templateMappings   Json?
+  createdBy          User?              @relation(fields: [createdById], references: [id])
+  masterSubmission   FormSubmission?    @relation("MasterSubmission", fields: [masterSubmissionId], references: [id])
+  pdfTemplate        PdfTemplate?       @relation(fields: [pdfTemplateId], references: [id])
+  facilitators       EventFacilitator[]
 }
 
 model EventFacilitator {
   id      String @id @default(cuid())
   eventId String
+  email   String
+  name    String
   event   Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
-
-  email String
-  name  String
 }
 
 model UploadedDataset {
-  id              String           @id @default(cuid())
-  name            String
-  uploadedBy      String
-  sharedWith      String[]
-  status          String
-  runFirstCentral Boolean          @default(false)
-  runCreditRegistry Boolean        @default(false)
-  createdAt       DateTime         @default(now())
-  records         DatasetRecord[]
+  id                String          @id @default(cuid())
+  name              String
+  uploadedBy        String
+  sharedWith        String[]
+  status            String
+  createdAt         DateTime        @default(now())
+  runCreditRegistry Boolean         @default(false)
+  runFirstCentral   Boolean         @default(false)
+  records           DatasetRecord[]
 }
 
 model DatasetRecord {
-  id                 String           @id @default(cuid())
-  datasetId          String
-  dataset            UploadedDataset  @relation(fields: [datasetId], references: [id], onDelete: Cascade)
-  reference          String           @unique
-  bvn                String?
-  rowData            Json
-  firstCentralRef    String?
-  creditRegistryRef  String?
-  processingStatus   String
+  id                String          @id @default(cuid())
+  datasetId         String
+  reference         String          @unique
+  bvn               String?
+  rowData           Json
+  firstCentralRef   String?
+  creditRegistryRef String?
+  processingStatus  String
+  dataset           UploadedDataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
 }
 
 model CrmInteraction {
-  id              String   @id @default(cuid())
-  customerPhone   String
-  sourceType      String   // "FORM" or "UPLOADED_DATA"
-  sourceId        String
-  feedbackText    String   @db.Text
-  status          String
-  loggedByEmail   String
-  loggedByName    String   
-  createdAt       DateTime @default(now())
+  id            String   @id @default(cuid())
+  customerPhone String
+  sourceType    String
+  sourceId      String
+  feedbackText  String
+  status        String
+  loggedByEmail String
+  loggedByName  String
+  createdAt     DateTime @default(now())
 }
