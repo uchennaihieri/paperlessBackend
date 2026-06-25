@@ -26,7 +26,7 @@ export const mailer = {
 };
 
 // ── Nodemailer (commented out) ────────────────────────────────────────────────
-// import nodemailer from "nodemailer";
+// imgport nodemailer from "nodemailer";
 
 // export const mailer = nodemailer.createTransport({
 //   host: process.env.SMTP_HOST ?? "smtp.zoho.com",
