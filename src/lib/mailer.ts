@@ -9,12 +9,14 @@ export const mailer = {
     to: string;
     subject: string;
     html: string;
+    attachments?: Array<{ filename?: string; content?: string | Buffer; path?: string }>;
   }) => {
     const { data, error } = await resend.emails.send({
       from: options.from,
       to: options.to,
       subject: options.subject,
       html: options.html,
+      attachments: options.attachments,
     });
 
     if (error) {
