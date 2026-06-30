@@ -503,6 +503,7 @@ model UploadedDataset {
   name              String
   uploadedBy        String
   sharedWith        String[]
+  headers           String[]        @default([])
   status            String
   createdAt         DateTime        @default(now())
   runCreditRegistry Boolean         @default(false)

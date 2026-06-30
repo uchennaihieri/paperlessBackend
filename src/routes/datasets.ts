@@ -38,7 +38,7 @@ router.post("/", authenticate, async (req: AuthRequest, res: any) => {
   const userEmail = req.user?.email;
   if (!userEmail) return res.status(401).json({ success: false, error: "Unauthorized" });
 
-  const { name, records, runFirstCentral, runCreditRegistry } = req.body;
+  const { name, records, runFirstCentral, runCreditRegistry, headers } = req.body;
   if (!name || !Array.isArray(records)) {
     return res.status(400).json({ success: false, error: "Name and records array are required" });
   }
@@ -52,7 +52,8 @@ router.post("/", authenticate, async (req: AuthRequest, res: any) => {
           status: "READY",
           runFirstCentral: !!runFirstCentral,
           runCreditRegistry: !!runCreditRegistry,
-          sharedWith: []
+          sharedWith: [],
+          headers: Array.isArray(headers) ? headers : []
         }
       });
 
