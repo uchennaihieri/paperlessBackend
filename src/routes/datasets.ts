@@ -133,13 +133,16 @@ router.post("/:id/share", authenticate, async (req: AuthRequest, res: any) => {
   try {
     const dataset = await prisma.uploadedDataset.findUnique({ where: { id } });
     if (!dataset) return res.status(404).json({ success: false, error: "Not found" });
-    if (dataset.uploadedBy !== userEmail) {
-      return res.status(403).json({ success: false, error: "Only the uploader can share this dataset" });
+    if (dataset.uploadedBy !== userEmail && !dataset.sharedWith.includes(userEmail || "")) {
+      return res.status(403).json({ success: false, error: "You do not have permission to share this dataset" });
     }
+
+    // Merge existing shared users with new emails to prevent overwriting
+    const updatedSharedWith = Array.from(new Set([...dataset.sharedWith, ...emails]));
 
     const updated = await prisma.uploadedDataset.update({
       where: { id },
-      data: { sharedWith: emails }
+      data: { sharedWith: updatedSharedWith }
     });
 
     res.json({ success: true, data: updated });
