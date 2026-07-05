@@ -267,6 +267,15 @@ router.post("/submit/:slug", memUpload.any(), async (req: Request, res: Response
       notifyActiveSignatories(submission.id).catch(console.error);
     } else if (initialStatus === "Completed") {
       notifySuccessfulCompletion(submission.id).catch(console.error);
+      
+      // Auto-generate PDF for public forms that require no signatories
+      prisma.pdfJobQueue.create({
+        data: {
+          sourceSubmissionId: submission.id,
+          jobType: "InternalForm",
+          targetSubmissionId: submission.id,
+        }
+      }).catch(console.error);
     }
 
     // ── Audit: record initial submission event ──
