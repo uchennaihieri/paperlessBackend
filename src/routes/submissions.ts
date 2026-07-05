@@ -235,6 +235,8 @@ router.get("/filings", async (req: AuthRequest, res: Response) => {
         updatedAt: true,
         formResponses: true,
         template: { select: { name: true, formOwner: true } },
+        publicSubmitterName: true,
+        publicSubmitterEmail: true,
         submittedBy: { select: { user_name: true, finca_email: true, branch: true } },
       }
     });
