@@ -9,24 +9,47 @@ import puppeteer, { Browser } from "puppeteer";
 export async function launchBrowser(): Promise<Browser> {
   const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
 
-  // Production path — use system Chromium
+  const defaultArgs = [
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+  ];
+
+  // Production path — use system Chromium if explicitly set
   if (executablePath) {
     return puppeteer.launch({
       headless: true,
       executablePath,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-      ],
+      args: defaultArgs,
     });
   }
 
-  // Local dev fallback — try Chrome, then Edge
+  // Fallback 1: Try default bundled puppeteer Chromium (needs sandbox disabled in Docker)
   try {
-    return await puppeteer.launch({ headless: true, channel: "chrome" });
-  } catch {
-    return puppeteer.launch({ headless: true, channel: "msedge" as any });
+    return await puppeteer.launch({ 
+      headless: true, 
+      args: defaultArgs 
+    });
+  } catch (err1) {
+    console.warn("Failed to launch bundled Chromium, trying system Chrome...", err1);
+    
+    // Fallback 2: Local dev Windows Chrome
+    try {
+      return await puppeteer.launch({ 
+        headless: true, 
+        channel: "chrome",
+        args: defaultArgs
+      });
+    } catch (err2) {
+      console.warn("Failed to launch system Chrome, trying Edge...", err2);
+      
+      // Fallback 3: Local dev Windows Edge
+      return puppeteer.launch({ 
+        headless: true, 
+        channel: "msedge" as any,
+        args: defaultArgs
+      });
+    }
   }
 }
