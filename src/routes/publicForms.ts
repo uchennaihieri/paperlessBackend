@@ -1,6 +1,21 @@
 import { Router, Request, Response } from "express";
+import multer from "multer";
+import path from "path";
 import prisma from "../lib/prisma";
 import { notifyActiveSignatories, notifySuccessfulCompletion } from "./workflow";
+import { isSharePointEnabled, uploadToSharePoint } from "../lib/sharepoint";
+
+// Files are always buffered in memory; they go straight to SharePoint (or disk)
+// on submission — never stored in a temp location.
+const memUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 100 * 1024 * 1024 }, // 100 MB per file
+});
+
+// Sanitise a string for use as a SharePoint / filesystem folder segment.
+function sanitiseFolder(s: string): string {
+  return s.replace(/[\\/:*?"<>|]/g, "").trim().toUpperCase();
+}
 
 const router = Router();
 
@@ -85,9 +100,22 @@ router.get("/slug/:slug", async (req: Request, res: Response) => {
 
 // POST /api/v1/public-forms/submit/:slug
 // Accepts a submission from an anonymous user
-router.post("/submit/:slug", async (req: Request, res: Response) => {
+router.post("/submit/:slug", memUpload.any(), async (req: Request, res: Response) => {
   const { slug } = req.params;
-  const { formResponses, publicSubmitterEmail, publicSubmitterName, token, submitterSignature } = req.body;
+  
+  let payload: any = {};
+  try {
+    if (req.body?.data) {
+      payload = JSON.parse(req.body.data);
+    } else {
+      payload = req.body;
+    }
+  } catch {
+    res.status(400).json({ success: false, error: "Invalid submission data.", code: "INVALID_SUBMISSION_DATA" });
+    return;
+  }
+
+  const { formResponses = {}, publicSubmitterEmail, publicSubmitterName, token, submitterSignature } = payload;
 
   if (!publicSubmitterEmail || !publicSubmitterName) {
     res.status(400).json({ success: false, error: "Name and Email are required.", code: "NAME_AND_EMAIL_REQUIRED" });
@@ -102,6 +130,8 @@ router.post("/submit/:slug", async (req: Request, res: Response) => {
     res.status(404).json({ success: false, error: "Form not found or not public", code: "FORM_NOT_FOUND" });
     return;
   }
+
+  const templateFields: any[] = typeof template.fields === "string" ? JSON.parse(template.fields) : (template.fields ?? []);
 
   // Generate Reference
   let reference = `PUB-${Date.now()}`;
@@ -128,6 +158,68 @@ router.post("/submit/:slug", async (req: Request, res: Response) => {
     console.error("Reference generation failed, using fallback", err);
   }
 
+  const updatedResponses: Record<string, any> = { ...formResponses };
+
+  // Resolve event_selector
+  try {
+    for (const field of templateFields) {
+      if ((field as any).type !== "event_selector") continue;
+      const responseKey = updatedResponses[field.id] !== undefined ? field.id : field.label;
+      const eventId: string = (updatedResponses[responseKey] ?? "").toString().trim();
+      if (!eventId) continue;
+
+      const event = await prisma.event.findUnique({ where: { id: eventId } });
+      if (event) {
+        updatedResponses[responseKey] = `${event.name} (${event.reference})`;
+        updatedResponses[`${responseKey}_id`] = event.id;
+      }
+    }
+  } catch (e) {
+    console.error("[event_selector] Event resolution failed:", e);
+  }
+
+  const uploadedFiles = (req.files as Express.Multer.File[]) ?? [];
+  const docCreates: Array<{ fieldName: string; originalName: string; filePath: string; mimeType: string; size: number; }> = [];
+
+  if (uploadedFiles.length > 0) {
+    const formFolder = sanitiseFolder(template.name);
+    const refFolder = sanitiseFolder(reference);
+
+    const byField: Record<string, Express.Multer.File[]> = {};
+    for (const file of uploadedFiles) {
+      if (!byField[file.fieldname]) byField[file.fieldname] = [];
+      byField[file.fieldname].push(file);
+    }
+
+    for (const [fieldName, files] of Object.entries(byField)) {
+      const attachments: Array<{ isAttachment: true; name: string; url: string }> = [];
+
+      for (const file of files) {
+        const folder = process.env.SHAREPOINT_UPLOAD_FOLDER
+          ? `${process.env.SHAREPOINT_UPLOAD_FOLDER}/${formFolder}/${refFolder}`
+          : `${formFolder}/${refFolder}`;
+
+        const storedPath = await uploadToSharePoint(
+          file.buffer,
+          file.originalname,
+          file.mimetype || "application/octet-stream",
+          folder
+        );
+
+        docCreates.push({
+          fieldName,
+          originalName: file.originalname,
+          filePath: storedPath,
+          mimeType: file.mimetype || "application/octet-stream",
+          size: file.size,
+        });
+
+        attachments.push({ isAttachment: true, name: file.originalname, url: "__pending__" });
+      }
+      updatedResponses[fieldName] = attachments;
+    }
+  }
+
   try {
     const { signatoriesData, initialStatus } = await buildPublicSignatories(template, publicSubmitterName, publicSubmitterEmail, submitterSignature);
 
@@ -136,13 +228,40 @@ router.post("/submit/:slug", async (req: Request, res: Response) => {
         formName: template.name,
         reference,
         templateId: template.id,
-        formResponses: formResponses ?? {},
+        formResponses: updatedResponses,
         publicSubmitterEmail,
         publicSubmitterName,
         status: initialStatus,
         signatories: { create: signatoriesData },
       },
     });
+
+    if (docCreates.length > 0) {
+      const finalResponses = { ...updatedResponses };
+      const fieldDocUrls: Record<string, string[]> = {};
+
+      for (const doc of docCreates) {
+        const created = await prisma.submissionDocument.create({
+          data: { submissionId: submission.id, ...doc },
+        });
+
+        if (!fieldDocUrls[doc.fieldName]) fieldDocUrls[doc.fieldName] = [];
+        fieldDocUrls[doc.fieldName].push(`/api/v1/file?docId=${created.id}`);
+      }
+
+      for (const [fieldName, urls] of Object.entries(fieldDocUrls)) {
+        const existing = finalResponses[fieldName] as any[];
+        finalResponses[fieldName] = existing.map((att: any, i: number) => ({
+          ...att,
+          url: urls[i] ?? att.url,
+        }));
+      }
+
+      await prisma.formSubmission.update({
+        where: { id: submission.id },
+        data: { formResponses: finalResponses },
+      });
+    }
 
     if (initialStatus === "In-review") {
       notifyActiveSignatories(submission.id).catch(console.error);
@@ -177,7 +296,6 @@ router.post("/submit/:slug", async (req: Request, res: Response) => {
           }
         });
 
-        // Also update batch status if all requests are completed
         const pendingCount = await prisma.formRequest.count({
           where: { batchId: request.batchId, status: "Pending" }
         });
@@ -246,9 +364,22 @@ router.get("/token/:token", async (req: Request, res: Response) => {
 });
 
 // POST /api/v1/public-forms/submit-token/:token
-router.post("/submit-token/:token", async (req: Request, res: Response) => {
+router.post("/submit-token/:token", memUpload.any(), async (req: Request, res: Response) => {
   const { token } = req.params;
-  const { formResponses, publicSubmitterName, submitterSignature } = req.body;
+  
+  let payload: any = {};
+  try {
+    if (req.body?.data) {
+      payload = JSON.parse(req.body.data);
+    } else {
+      payload = req.body;
+    }
+  } catch {
+    res.status(400).json({ success: false, error: "Invalid submission data.", code: "INVALID_SUBMISSION_DATA" });
+    return;
+  }
+
+  const { formResponses = {}, publicSubmitterName, submitterSignature } = payload;
 
   if (!publicSubmitterName) {
     res.status(400).json({ success: false, error: "Name is required.", code: "NAME_REQUIRED" });
@@ -271,8 +402,9 @@ router.post("/submit-token/:token", async (req: Request, res: Response) => {
   }
 
   const template = request.batch.template;
-  const publicSubmitterEmail = request.targetEmail;
+  const templateFields: any[] = typeof template.fields === "string" ? JSON.parse(template.fields) : (template.fields ?? []);
 
+  // Generate Reference
   let reference = `REQ-${Date.now()}`;
   try {
     const acronym = template.name.split(" ").map((w: string) => w[0]).join("").toUpperCase();
@@ -297,22 +429,111 @@ router.post("/submit-token/:token", async (req: Request, res: Response) => {
     console.error("Reference generation failed, using fallback", err);
   }
 
+  const updatedResponses: Record<string, any> = { ...formResponses };
+
+  // Resolve event_selector
   try {
-    const { signatoriesData, initialStatus } = await buildPublicSignatories(template, publicSubmitterName, publicSubmitterEmail, submitterSignature);
+    for (const field of templateFields) {
+      if ((field as any).type !== "event_selector") continue;
+      const responseKey = updatedResponses[field.id] !== undefined ? field.id : field.label;
+      const eventId: string = (updatedResponses[responseKey] ?? "").toString().trim();
+      if (!eventId) continue;
+
+      const event = await prisma.event.findUnique({ where: { id: eventId } });
+      if (event) {
+        updatedResponses[responseKey] = `${event.name} (${event.reference})`;
+        updatedResponses[`${responseKey}_id`] = event.id;
+      }
+    }
+  } catch (e) {
+    console.error("[event_selector] Event resolution failed:", e);
+  }
+
+  const uploadedFiles = (req.files as Express.Multer.File[]) ?? [];
+  const docCreates: Array<{ fieldName: string; originalName: string; filePath: string; mimeType: string; size: number; }> = [];
+
+  if (uploadedFiles.length > 0) {
+    const formFolder = sanitiseFolder(template.name);
+    const refFolder = sanitiseFolder(reference);
+
+    const byField: Record<string, Express.Multer.File[]> = {};
+    for (const file of uploadedFiles) {
+      if (!byField[file.fieldname]) byField[file.fieldname] = [];
+      byField[file.fieldname].push(file);
+    }
+
+    for (const [fieldName, files] of Object.entries(byField)) {
+      const attachments: Array<{ isAttachment: true; name: string; url: string }> = [];
+
+      for (const file of files) {
+        const folder = process.env.SHAREPOINT_UPLOAD_FOLDER
+          ? `${process.env.SHAREPOINT_UPLOAD_FOLDER}/${formFolder}/${refFolder}`
+          : `${formFolder}/${refFolder}`;
+
+        const storedPath = await uploadToSharePoint(
+          file.buffer,
+          file.originalname,
+          file.mimetype || "application/octet-stream",
+          folder
+        );
+
+        docCreates.push({
+          fieldName,
+          originalName: file.originalname,
+          filePath: storedPath,
+          mimeType: file.mimetype || "application/octet-stream",
+          size: file.size,
+        });
+
+        attachments.push({ isAttachment: true, name: file.originalname, url: "__pending__" });
+      }
+      updatedResponses[fieldName] = attachments;
+    }
+  }
+
+  try {
+    const { signatoriesData, initialStatus } = await buildPublicSignatories(template, publicSubmitterName, request.targetEmail, submitterSignature);
 
     const submission = await prisma.formSubmission.create({
       data: {
         formName: template.name,
         reference,
         templateId: template.id,
-        formResponses: formResponses ?? {},
-        publicSubmitterEmail,
+        formResponses: updatedResponses,
+        publicSubmitterEmail: request.targetEmail,
         publicSubmitterName,
         status: initialStatus,
         requestBatchId: request.batchId,
         signatories: { create: signatoriesData },
       },
     });
+
+    if (docCreates.length > 0) {
+      const finalResponses = { ...updatedResponses };
+      const fieldDocUrls: Record<string, string[]> = {};
+
+      for (const doc of docCreates) {
+        const created = await prisma.submissionDocument.create({
+          data: { submissionId: submission.id, ...doc },
+        });
+
+        if (!fieldDocUrls[doc.fieldName]) fieldDocUrls[doc.fieldName] = [];
+        fieldDocUrls[doc.fieldName].push(`/api/v1/file?docId=${created.id}`);
+      }
+
+      for (const [fieldName, urls] of Object.entries(fieldDocUrls)) {
+        const existing = finalResponses[fieldName] as any[];
+        finalResponses[fieldName] = existing.map((att: any, i: number) => ({
+          ...att,
+          url: urls[i] ?? att.url,
+        }));
+      }
+
+      await prisma.formSubmission.update({
+        where: { id: submission.id },
+        data: { formResponses: finalResponses },
+      });
+    }
 
     if (initialStatus === "In-review") {
       notifyActiveSignatories(submission.id).catch(console.error);
@@ -328,7 +549,7 @@ router.post("/submit-token/:token", async (req: Request, res: Response) => {
         newStatus: initialStatus,
         action: "submitted_request",
         actorName: publicSubmitterName,
-        actorEmail: publicSubmitterEmail,
+        actorEmail: request.targetEmail,
         note: `Targeted Request Submitted: ${template.name}`,
       },
     }).catch(console.error);
@@ -363,6 +584,129 @@ router.post("/submit-token/:token", async (req: Request, res: Response) => {
   } catch (err: any) {
     console.error("[public submit error]", err);
     res.status(500).json({ success: false, error: "Failed to submit form.", code: "SUBMIT_FAILED" });
+  }
+});
+
+// GET /api/v1/public-forms/slug/:slug/options
+// Fetches dynamic options for select, searchable_select, and event_selector
+router.get("/slug/:slug/options", async (req: Request, res: Response) => {
+  const { slug } = req.params;
+  const template = await prisma.formTemplate.findUnique({
+    where: { publicSlug: slug },
+  });
+
+  if (!template || !template.isPublic) {
+    res.status(404).json({ success: false, error: "Form not found or not public", code: "FORM_NOT_FOUND" });
+    return;
+  }
+
+  const fields: any[] = typeof template.fields === "string" ? JSON.parse(template.fields) : (template.fields ?? []);
+  const optionsMap: Record<string, { label: string, value: string }[]> = {};
+
+  try {
+    for (const field of fields) {
+      if ((field.type === "select" || field.type === "searchable_select")) {
+        if (field.optionsSource === "database" && field.optionsTable) {
+          try {
+            const query = `SELECT DISTINCT "Options" as option FROM "${field.optionsTable}" WHERE "Options" IS NOT NULL`;
+            const rows = await prisma.$queryRawUnsafe<any[]>(query);
+            optionsMap[field.id] = rows.map((r) => ({ value: r.option, label: r.option }));
+          } catch (e) {
+             optionsMap[field.id] = [];
+          }
+        } else if (field.optionsSource === "reusable_list" && field.reusableListId) {
+          try {
+            const list = await prisma.reusableList.findUnique({ where: { id: field.reusableListId } });
+            if (list && Array.isArray(list.items)) {
+               optionsMap[field.id] = (list.items as string[]).map(s => ({ label: s, value: s }));
+            } else {
+               optionsMap[field.id] = [];
+            }
+          } catch (e) {
+             optionsMap[field.id] = [];
+          }
+        }
+      } else if (field.type === "event_selector") {
+        try {
+          const events = await prisma.event.findMany({
+            where: { endDate: { gte: new Date() } },
+            orderBy: { startDate: "asc" }
+          });
+          optionsMap[field.id] = events.map(e => ({
+            value: e.id,
+            label: `${e.name} (${e.reference}) - ${e.startDate.toLocaleDateString()}`
+          }));
+        } catch (e) {
+          optionsMap[field.id] = [];
+        }
+      }
+    }
+    res.json({ success: true, data: optionsMap });
+  } catch (err) {
+    console.error("Error fetching options for public form:", err);
+    res.status(500).json({ success: false, error: "Failed to fetch options", code: "OPTIONS_FETCH_FAILED" });
+  }
+});
+
+// GET /api/v1/public-forms/token/:token/options
+router.get("/token/:token/options", async (req: Request, res: Response) => {
+  const { token } = req.params;
+  const request = await prisma.formRequest.findUnique({
+    where: { token },
+    include: { batch: { include: { template: true } } }
+  });
+
+  if (!request) {
+    res.status(404).json({ success: false, error: "Request not found", code: "REQUEST_NOT_FOUND" });
+    return;
+  }
+
+  const template = request.batch.template;
+  const fields: any[] = typeof template.fields === "string" ? JSON.parse(template.fields) : (template.fields ?? []);
+  const optionsMap: Record<string, { label: string, value: string }[]> = {};
+
+  try {
+    for (const field of fields) {
+      if ((field.type === "select" || field.type === "searchable_select")) {
+        if (field.optionsSource === "database" && field.optionsTable) {
+          try {
+            const query = `SELECT DISTINCT "Options" as option FROM "${field.optionsTable}" WHERE "Options" IS NOT NULL`;
+            const rows = await prisma.$queryRawUnsafe<any[]>(query);
+            optionsMap[field.id] = rows.map((r) => ({ value: r.option, label: r.option }));
+          } catch (e) {
+             optionsMap[field.id] = [];
+          }
+        } else if (field.optionsSource === "reusable_list" && field.reusableListId) {
+          try {
+            const list = await prisma.reusableList.findUnique({ where: { id: field.reusableListId } });
+            if (list && Array.isArray(list.items)) {
+               optionsMap[field.id] = (list.items as string[]).map(s => ({ label: s, value: s }));
+            } else {
+               optionsMap[field.id] = [];
+            }
+          } catch (e) {
+             optionsMap[field.id] = [];
+          }
+        }
+      } else if (field.type === "event_selector") {
+        try {
+          const events = await prisma.event.findMany({
+            where: { endDate: { gte: new Date() } },
+            orderBy: { startDate: "asc" }
+          });
+          optionsMap[field.id] = events.map(e => ({
+            value: e.id,
+            label: `${e.name} (${e.reference}) - ${e.startDate.toLocaleDateString()}`
+          }));
+        } catch (e) {
+          optionsMap[field.id] = [];
+        }
+      }
+    }
+    res.json({ success: true, data: optionsMap });
+  } catch (err) {
+    console.error("Error fetching options for public form token:", err);
+    res.status(500).json({ success: false, error: "Failed to fetch options", code: "OPTIONS_FETCH_FAILED" });
   }
 });
 
