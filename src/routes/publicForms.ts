@@ -265,10 +265,12 @@ router.post("/submit/:slug", memUpload.any(), async (req: Request, res: Response
 
     if (initialStatus === "In-review") {
       notifyActiveSignatories(submission.id).catch(console.error);
-    } else if (initialStatus === "Completed") {
-      notifySuccessfulCompletion(submission.id).catch(console.error);
+    } else if (initialStatus === "Completed" || initialStatus === "Processing") {
+      if (initialStatus === "Completed") {
+        notifySuccessfulCompletion(submission.id).catch(console.error);
+      }
       
-      // Auto-generate PDF for public forms that require no signatories
+      // Auto-generate PDF for public forms that require no signatories (Completed) or have treaters (Processing)
       prisma.pdfJobQueue.create({
         data: {
           sourceSubmissionId: submission.id,
