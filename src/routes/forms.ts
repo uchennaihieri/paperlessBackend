@@ -417,4 +417,66 @@ router.post("/:id/copy", requireAdmin as any, async (req: AuthRequest, res: Resp
   }
 });
 
+// ── POST /api/v1/forms/draft-pdf ─────────────────────────────────────────────
+import { generateDraftSubmissionPdf, generateDraftDynamicContractPdf } from "../lib/pdfGenerator";
+
+router.post("/draft-pdf", async (req: AuthRequest, res: Response) => {
+  const { formResponses, templateId, contractFieldName } = req.body;
+  if (!templateId || !formResponses) {
+    res.status(400).json({ success: false, error: "templateId and formResponses are required." });
+    return;
+  }
+
+  try {
+    let pdfResult: { buffer: Buffer, filename: string } | null = null;
+    
+    if (contractFieldName) {
+      // Generated Contract
+      pdfResult = await generateDraftDynamicContractPdf(templateId, formResponses, req.user, contractFieldName);
+    } else {
+      // Signable Document (Standard PDF but signed)
+      pdfResult = await generateDraftSubmissionPdf(templateId, formResponses, req.user);
+    }
+
+    if (!pdfResult) {
+      res.status(500).json({ success: false, error: "Failed to generate draft PDF." });
+      return;
+    }
+
+    const pdfTemp = await prisma.pdfTemp.create({
+      data: {
+        pdfBuffer: pdfResult.buffer
+      }
+    });
+
+    res.json({ success: true, tempPdfId: pdfTemp.id });
+  } catch (error: any) {
+    console.error("Error generating draft PDF:", error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ── GET /api/v1/forms/draft-pdf/:id ──────────────────────────────────────────
+router.get("/draft-pdf/:id", async (req: any, res: Response) => {
+  try {
+    const pdfTemp = await prisma.pdfTemp.findUnique({
+      where: { id: req.params.id }
+    });
+
+    if (!pdfTemp) {
+      res.status(404).send("Draft PDF not found.");
+      return;
+    }
+
+    res.set({
+      "Content-Type": "application/pdf",
+      "Content-Disposition": "inline; filename=\"Draft_Preview.pdf\"",
+    });
+    res.send(pdfTemp.pdfBuffer);
+  } catch (error: any) {
+    console.error("Error fetching draft PDF:", error);
+    res.status(500).send("Server error");
+  }
+});
+
 export default router;

@@ -534,3 +534,9 @@ model CrmInteraction {
   loggedByName  String
   createdAt     DateTime @default(now())
 }
+
+model PdfTemp {
+  id        String   @id @default(cuid())
+  pdfBuffer Bytes
+  createdAt DateTime @default(now())
+}

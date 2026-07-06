@@ -80,6 +80,16 @@ export async function runEventCronCheck() {
         data: { masterSubmissionId: newSubmission.id }
       });
     }
+
+    // ── Cleanup old PdfTemp rows (> 24 hours) ──────────────────────────────
+    const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const deletedTempPdfs = await prisma.pdfTemp.deleteMany({
+      where: { createdAt: { lt: oneDayAgo } }
+    });
+    if (deletedTempPdfs.count > 0) {
+      logger.info(`🧹 Cleaned up ${deletedTempPdfs.count} old temporary PDFs.`);
+    }
+
   } catch (e) {
     logger.error("Event Cron Error: " + (e as Error).message);
   }

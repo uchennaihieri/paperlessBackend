@@ -393,6 +393,8 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
     signingType = "sequential",
     initiatorToken,
     initiatorSignature,
+    tempPdfId,
+    initiatorAnnotations,
     draftId,
     requestToken,
   } = payload;
@@ -512,11 +514,9 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
     // If the frontend already verified the token or used draw/upload and provides a direct base64 string
     const userEmail = req.user?.email;
     if (!userEmail) { res.status(401).json({ success: false, error: "Not logged in", code: "NOT_LOGGED_IN" }); return; }
-    if (!initiatorNeedsToSign) {
-      finalSignatureData = initiatorSignature;
-      finalSignatureStatus = "Signed";
-      finalSignedAt = new Date();
-    }
+    finalSignatureData = initiatorSignature;
+    finalSignatureStatus = "Signed";
+    finalSignedAt = new Date();
   } else if (initiatorToken) {
     const userEmail = req.user?.email;
     if (!userEmail) { res.status(401).json({ success: false, error: "Not logged in", code: "NOT_LOGGED_IN" }); return; }
@@ -528,11 +528,9 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
       res.status(400).json({ success: false, error: "Invalid signature token.", code: "INVALID_SIGNATURE_TOKEN" });
       return;
     }
-    if (!initiatorNeedsToSign) {
-      finalSignatureData = decrypt(secData.encryptedSignature);
-      finalSignatureStatus = "Signed";
-      finalSignedAt = new Date();
-    }
+    finalSignatureData = decrypt(secData.encryptedSignature);
+    finalSignatureStatus = "Signed";
+    finalSignedAt = new Date();
   }
 
   // ── Generate reference number (if not a draft) ──────────────────────────────
@@ -703,7 +701,79 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
     }
   }
 
+  // ── Handle tempPdfId / initiatorAnnotations ───────────────────────────────────
+  if (tempPdfId) {
+    try {
+      const pdfTemp = await prisma.pdfTemp.findUnique({
+        where: { id: tempPdfId }
+      });
+      
+      if (pdfTemp) {
+        let finalBuffer = pdfTemp.pdfBuffer;
 
+        // Apply annotations using pdf-lib if provided
+        if (Array.isArray(initiatorAnnotations) && initiatorAnnotations.length > 0) {
+          const { PDFDocument } = require('pdf-lib');
+          const pdfDoc = await PDFDocument.load(finalBuffer);
+          const pages = pdfDoc.getPages();
+
+          for (const ann of initiatorAnnotations) {
+            const pIndex = (ann.page ?? 1) - 1;
+            if (pIndex < 0 || pIndex >= pages.length) continue;
+            const pdfPage = pages[pIndex];
+            const { height } = pdfPage.getSize();
+
+            if (ann.type === "signature" || ann.type === "image") {
+              const b64Data = ann.value.split(',')[1] || ann.value;
+              const imgBytes = Buffer.from(b64Data, "base64");
+              let pdfImage;
+              if (ann.value.includes("image/jpeg") || ann.value.includes("image/jpg")) {
+                pdfImage = await pdfDoc.embedJpg(imgBytes);
+              } else {
+                pdfImage = await pdfDoc.embedPng(imgBytes);
+              }
+              pdfPage.drawImage(pdfImage, {
+                x: ann.x,
+                y: height - ann.y - (ann.height ?? 50),
+                width: ann.width ?? 150,
+                height: ann.height ?? 50,
+              });
+            }
+          }
+          
+          const modifiedBytes = await pdfDoc.save();
+          finalBuffer = Buffer.from(modifiedBytes);
+        }
+        
+        const folder = process.env.SHAREPOINT_UPLOAD_FOLDER
+            ? `${process.env.SHAREPOINT_UPLOAD_FOLDER}/${formFolder}/${refFolder}`
+            : `${formFolder}/${refFolder}`;
+            
+        // Which field is it?
+        const contractFieldLabel = signableDocumentFieldLabel || (generatedContractFields[0]?.label ?? "Contract");
+        const originalFilename = `Signed_${contractFieldLabel.replace(/[^a-zA-Z0-9]/g, "_")}.pdf`;
+
+        const storedPath = await uploadToSharePoint(
+            finalBuffer, originalFilename, "application/pdf", folder
+        );
+
+        docCreates.push({
+            fieldName: contractFieldLabel,
+            originalName: originalFilename,
+            filePath: storedPath,
+            mimeType: "application/pdf",
+            size: finalBuffer.length,
+        });
+
+        if (!internalAttachments[contractFieldLabel]) internalAttachments[contractFieldLabel] = [];
+        internalAttachments[contractFieldLabel].push({ isAttachment: true, name: originalFilename, url: "__pending__" });
+
+        await prisma.pdfTemp.delete({ where: { id: tempPdfId } });
+      }
+    } catch (e) {
+      console.error("[tempPdfId] Error processing drafted PDF:", e);
+    }
+  }
 
   const createdGhostForms: Array<{ ghostId: string, fieldName: string }> = [];
 

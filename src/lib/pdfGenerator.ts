@@ -658,3 +658,126 @@ export async function generateDynamicContractPdf(submissionId: string, templateI
   const filename = `${submission.formName.replace(/[^a-zA-Z0-9]/g, "_")}_${fieldName.replace(/[^a-zA-Z0-9]/g, "_")}_${submission.reference || submission.id.slice(-6)}.pdf`;
   return { buffer: Buffer.from(pdfBuffer), filename };
 }
+
+export async function generateDraftSubmissionPdf(templateId: string, formResponses: any, user: any): Promise<{ buffer: Buffer, filename: string } | null> {
+  const template = await prisma.formTemplate.findUnique({
+    where: { id: templateId },
+    include: { pdfTemplate: { include: { fields: true } } }
+  });
+
+  if (!template || !template.pdfTemplate || !template.pdfTemplate.sharepointPath) {
+    return null;
+  }
+
+  const mockSubmission = {
+    id: "draft",
+    formName: template.name,
+    createdAt: new Date(),
+    formResponses,
+    submittedBy: user,
+    signatories: [],
+    template: template
+  };
+
+  const { buffer: pdfBuffer } = await downloadFromSharePoint(template.pdfTemplate.sharepointPath);
+  const pdfDoc = await PDFDocument.load(pdfBuffer);
+  const pages = pdfDoc.getPages();
+
+  const pdfDataMapping: Record<string, any> = {};
+  const globalTemplateMappings = (template.templateMappings as Record<string, any>) || {};
+
+  const unified = await buildUnifiedContext(mockSubmission, pdfDataMapping);
+
+  for (const field of template.pdfTemplate.fields as any[]) {
+    const mappingPath = globalTemplateMappings[field.name] || field.mappingPath;
+    let val = pdfDataMapping[field.name];
+    if (!val && mappingPath && mappingPath !== "FormInput") {
+      val = resolveContextPath(mappingPath, unified);
+    }
+    if (!val) continue;
+
+    const pageIndex = field.page ?? 0;
+    if (pageIndex >= pages.length || pageIndex < 0) continue;
+    const pdfPage = pages[pageIndex];
+    const { width: pWidth, height: pHeight } = pdfPage.getSize();
+
+    const x = field.x * pWidth;
+    const y = (1 - field.y - field.height) * pHeight;
+
+    if (field.type === "text") {
+      pdfPage.drawText(String(val), {
+        x,
+        y,
+        size: field.fontSize || 12,
+        color: rgb(0, 0, 0),
+      });
+    }
+  }
+
+  const generatedBytes = await pdfDoc.save();
+  return { buffer: Buffer.from(generatedBytes), filename: `Draft_${template.name}.pdf` };
+}
+
+export async function generateDraftDynamicContractPdf(templateId: string, formResponses: any, user: any, contractFieldName: string): Promise<{ buffer: Buffer, filename: string } | null> {
+  const template = await prisma.formTemplate.findUnique({
+    where: { id: templateId }
+  });
+
+  if (!template) return null;
+
+  let contractTemplateId = "";
+  let fieldTemplateMappings: Record<string, string> = {};
+  const formFields = (template.fields as any[]) || [];
+  for (const f of formFields) {
+    if (f.label === contractFieldName) {
+      contractTemplateId = f.templateId;
+      fieldTemplateMappings = f.templateMappings || {};
+      break;
+    }
+  }
+
+  if (!contractTemplateId) return null;
+
+  const pdfTemplate = await prisma.pdfTemplate.findUnique({
+    where: { id: contractTemplateId },
+    include: { fields: true }
+  });
+
+  if (!pdfTemplate || pdfTemplate.type !== "html" || !pdfTemplate.sharepointPath) {
+    return null;
+  }
+
+  const mockSubmission = {
+    id: "draft",
+    formName: template.name,
+    createdAt: new Date(),
+    formResponses,
+    submittedBy: user,
+    signatories: [],
+    template: template
+  };
+
+  const fileData = await downloadFromSharePoint(pdfTemplate.sharepointPath);
+  if (!fileData || !fileData.buffer) return null;
+  const htmlSource = fileData.buffer.toString("utf-8");
+
+  const unified = await buildUnifiedContext(mockSubmission, {});
+  
+  for (const field of (pdfTemplate as any).fields || []) {
+    const mappingPath = fieldTemplateMappings[field.name] || field.mappingPath;
+    if (!mappingPath) continue;
+    if (mappingPath === "FormInput") continue;
+    unified[field.name] = resolveContextPath(mappingPath, unified);
+  }
+
+  const compiled = Handlebars.compile(htmlSource);
+  const html = compiled(unified);
+
+  const browser = await launchBrowser();
+  const page = await browser.newPage();
+  await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 15_000 });
+  const pdfBuffer = await page.pdf({ format: "A4", printBackground: true });
+  await browser.close();
+
+  return { buffer: Buffer.from(pdfBuffer), filename: `Draft_${contractFieldName}.pdf` };
+}
