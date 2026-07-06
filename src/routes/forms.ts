@@ -393,7 +393,9 @@ router.post("/:id/toggle-public", async (req: AuthRequest, res: Response) => {
     }
 
     let slug = template.publicSlug;
-    if (isPublic && !slug) {
+    const expectedBaseSlug = generateSlug(template.name) || "form";
+    const isUpToDate = slug === expectedBaseSlug || (slug && slug.startsWith(`${expectedBaseSlug}-`));
+    if (isPublic && !isUpToDate) {
       slug = await getUniqueSlug(template.name, template.id);
     }
 
