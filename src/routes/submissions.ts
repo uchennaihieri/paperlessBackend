@@ -161,7 +161,15 @@ router.get("/action-items", async (req: AuthRequest, res: Response) => {
           ],
         },
         {
-          OR: branchRoleConditions
+          OR: [
+            { delegatedTo: { equals: req.user?.email || "", mode: "insensitive" } },
+            {
+              AND: [
+                { delegatedTo: null },
+                { OR: branchRoleConditions }
+              ]
+            }
+          ]
         }
       ]
     },
@@ -1308,6 +1316,65 @@ router.post("/:id/file-attachments", async (req, res: Response) => {
 
   await prisma.formSubmission.update({ where: { id: req.params.id }, data: { status: "Filed" } });
   res.json({ success: true });
+});
+// ── POST /api/v1/submissions/:id/delegate ─────────────────────────────────────
+router.post("/:id/delegate", async (req: AuthRequest, res: Response) => {
+  if (!req.user) { res.status(401).json({ success: false, error: "Unauthenticated" }); return; }
+  const { targetEmail } = req.body;
+  if (!targetEmail) { res.status(400).json({ success: false, error: "Target email required" }); return; }
+
+  const targetUser = await prisma.user.findFirst({ where: { finca_email: targetEmail } });
+  if (!targetUser) { res.status(404).json({ success: false, error: "Target user not found" }); return; }
+
+  const submission = await prisma.formSubmission.findUnique({
+    where: { id: req.params.id },
+    include: { template: true }
+  });
+  if (!submission) { res.status(404).json({ success: false, error: "Submission not found" }); return; }
+
+  // Delegate the form
+  await prisma.formSubmission.update({
+    where: { id: req.params.id },
+    data: {
+      status: "Processing", // Kept in processing so only the user sees it in their queue
+      delegatedTo: targetUser.finca_email,
+      treaterEmail: null,
+      treatedBy: null
+    }
+  });
+
+  // Log Audit
+  await prisma.formAuditTrail.create({
+    data: {
+      submissionId: submission.id,
+      prevStatus: submission.status,
+      newStatus: "Processing (Delegated)",
+      action: "Delegate",
+      actorName: req.user.user_name,
+      actorEmail: req.user.email,
+      note: `Delegated to ${targetUser.user_name} (${targetUser.finca_email})`,
+      formReference: submission.reference || undefined
+    }
+  });
+
+  // Notify the user
+  const submissionLink = `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/dashboard/forms/submissions/${submission.id}`;
+  await mailer.sendMail({
+    to: targetUser.finca_email as string,
+    subject: `Form Delegated: ${submission.formName}`,
+    html: `
+      <div style="font-family: sans-serif; color: #333;">
+        <h2 style="color: #4F46E5;">Form Delegated</h2>
+        <p>Hello ${targetUser.user_name},</p>
+        <p><strong>${req.user.user_name}</strong> has delegated a form submission to you for processing.</p>
+        <p><strong>Form:</strong> ${submission.formName}</p>
+        <p><strong>Reference:</strong> ${submission.reference || "N/A"}</p>
+        <a href="${submissionLink}" style="display: inline-block; background: #4F46E5; color: #fff; padding: 10px 20px; text-decoration: none; border-radius: 5px; margin-top: 15px;">View Submission</a>
+      </div>
+    `
+  }).catch(console.error);
+
+  res.json({ success: true, message: "Form delegated successfully" });
 });
 
 // ── PUT /api/v1/submissions/:id ───────────────────────────────────────────────
