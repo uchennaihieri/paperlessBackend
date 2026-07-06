@@ -55,17 +55,49 @@ function resolveContextPath(path: string, ctx: Record<string, any>): any {
 async function buildUnifiedContext(submission: any, pdfDataMapping: Record<string, any>) {
   const raw = submission.formResponses as Record<string, any>;
 
-  // Build Questions array — handle file attachments gracefully
-  const Questions: { index: number; label: string; value: string }[] = [];
+  const templateFields = Array.isArray(submission.template?.fields)
+    ? submission.template.fields
+    : typeof submission.template?.fields === "string"
+      ? JSON.parse(submission.template.fields)
+      : [];
+
+  const processedKeys = new Set<string>();
+  const Questions: { index: number; label: string; value: string; key: string }[] = [];
   let qi = 1;
-  for (const [label, val] of Object.entries(raw)) {
-    let displayVal = "";
-    if (Array.isArray(val) && val[0]?.isAttachment) {
-      displayVal = val.map((v: any) => v.name).join(", ");
-    } else {
-      displayVal = Array.isArray(val) ? val.join(", ") : String(val ?? "");
+
+  templateFields.forEach((field: any) => {
+    const valById = raw[field.id];
+    const valByLabel = raw[field.label];
+    
+    if (valById !== undefined || valByLabel !== undefined) {
+      const key = valById !== undefined ? field.id : field.label;
+      const val = valById !== undefined ? valById : valByLabel;
+      const label = field.label || key;
+
+      let displayVal = "";
+      if (Array.isArray(val) && val[0]?.isAttachment) {
+        displayVal = val.map((v: any) => v.name).join(", ");
+      } else {
+        displayVal = Array.isArray(val) ? val.join(", ") : String(val ?? "");
+      }
+      
+      Questions.push({ index: qi++, label, value: displayVal, key });
+      if (field.id) processedKeys.add(field.id);
+      if (field.label) processedKeys.add(field.label);
     }
-    Questions.push({ index: qi++, label, value: displayVal });
+  });
+
+  for (const [label, val] of Object.entries(raw)) {
+    if (label !== "CompletedFormPDF" && label !== "Participants" && !processedKeys.has(label)) {
+      let displayVal = "";
+      if (Array.isArray(val) && val[0]?.isAttachment) {
+        displayVal = val.map((v: any) => v.name).join(", ");
+      } else {
+        displayVal = Array.isArray(val) ? val.join(", ") : String(val ?? "");
+      }
+      const fallbackLabel = label.charAt(0).toUpperCase() + label.slice(1).replace(/([A-Z])/g, " $1");
+      Questions.push({ index: qi++, label: fallbackLabel, value: displayVal, key: label });
+    }
   }
 
   // Batch-lookup Users by email to get job title (user_role) for each signatory
