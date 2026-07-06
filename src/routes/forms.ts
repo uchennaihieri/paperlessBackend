@@ -1,6 +1,43 @@
 import { Router, Response } from "express";
 import prisma from "../lib/prisma";
 import { authenticate, requireAdmin, AuthRequest } from "../middleware/authenticate";
+import crypto from "crypto";
+
+// Helper function to generate URL-safe slugs
+function generateSlug(name: string): string {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9\s-]/g, "") // Remove non-alphanumeric chars (keep spaces and hyphens)
+    .replace(/[\s-]+/g, "-");     // Replace spaces/multiple hyphens with a single hyphen
+}
+
+async function getUniqueSlug(name: string, excludeId?: string): Promise<string> {
+  let baseSlug = generateSlug(name);
+  if (!baseSlug) baseSlug = "form"; // Fallback if name is empty after sanitization
+  
+  let slug = baseSlug;
+  let counter = 0;
+  
+  while (true) {
+    const existing = await prisma.formTemplate.findUnique({
+      where: { publicSlug: slug }
+    });
+    
+    if (!existing || existing.id === excludeId) {
+      return slug;
+    }
+    
+    // Collision found, append short random string
+    const randomSuffix = crypto.randomBytes(2).toString("hex");
+    slug = `${baseSlug}-${randomSuffix}`;
+    counter++;
+    if (counter > 10) {
+      // Just in case, append a timestamp
+      slug = `${baseSlug}-${Date.now()}`;
+    }
+  }
+}
 
 const router = Router();
 
@@ -255,6 +292,7 @@ router.post("/", requireAdmin as any, async (req: AuthRequest, res: Response) =>
         automatedSignatories: automatedSignatories || null,
         automatedSigningType: automatedSigningType || null,
         templateMappings: templateMappings || null,
+        publicSlug: await getUniqueSlug(name),
       } as any,
     });
     res.status(201).json({ success: true, data: template });
@@ -293,6 +331,7 @@ router.patch("/:id", requireAdmin as any, async (req: AuthRequest, res: Response
         automatedSignatories: automatedSignatories || null,
         automatedSigningType: automatedSigningType || null,
         templateMappings: templateMappings || null,
+        publicSlug: await getUniqueSlug(name, req.params.id),
       } as any,
     });
     res.json({ success: true, data: template });
@@ -355,15 +394,12 @@ router.post("/:id/toggle-public", async (req: AuthRequest, res: Response) => {
 
     let slug = template.publicSlug;
     if (isPublic && !slug) {
-      const words = ["alpha", "bravo", "delta", "echo", "fox", "golf", "hotel", "india", "lima", "mike", "oscar", "papa", "romeo", "sierra", "tango", "victor", "dummy", "cathouse", "mango", "zebra", "apple", "ocean", "river", "cloud"];
-      const w = words[Math.floor(Math.random() * words.length)];
-      const n = Math.floor(Math.random() * 10000);
-      slug = `${w}${n}`;
+      slug = await getUniqueSlug(template.name, template.id);
     }
 
     const updated = await prisma.formTemplate.update({
       where: { id: req.params.id },
-      data: { isPublic, publicSlug: isPublic ? slug : null },
+      data: { isPublic, publicSlug: slug }, // We no longer clear it to null when isPublic is false, per the user's requirement
     });
     res.json({ success: true, data: updated });
   } catch (err: any) {
