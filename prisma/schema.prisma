@@ -101,6 +101,7 @@ model FormSubmission {
   publicSubmitterName  String?
   requestBatchId       String?
   delegatedTo          String?
+  correctionRequests   Json?
   eventAsMaster        Event?                   @relation("MasterSubmission")
   submittedBy          User?                    @relation(fields: [submittedById], references: [id])
   template             FormTemplate             @relation(fields: [templateId], references: [id], onDelete: Cascade)
@@ -504,11 +505,11 @@ model UploadedDataset {
   name              String
   uploadedBy        String
   sharedWith        String[]
-  headers           String[]        @default([])
   status            String
   createdAt         DateTime        @default(now())
   runCreditRegistry Boolean         @default(false)
   runFirstCentral   Boolean         @default(false)
+  headers           String[]        @default([])
   records           DatasetRecord[]
 }
 

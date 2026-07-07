@@ -3,6 +3,7 @@ import fs from "fs/promises";
 import path from "path";
 import multer from "multer";
 import prisma from "../lib/prisma";
+import { Prisma } from "@prisma/client";
 import { authenticate, AuthRequest } from "../middleware/authenticate";
 import { hashToken, decrypt } from "../lib/crypto";
 import { isSharePointEnabled, uploadToSharePoint, downloadFromSharePoint } from "../lib/sharepoint";
@@ -1535,6 +1536,236 @@ router.patch("/:id/soft-delete", async (req: AuthRequest, res: Response) => {
   }).catch((e: any) => console.error("[audit] soft-delete error:", e));
 
   res.json({ success: true, data: updated });
+});
+
+// ── POST /api/v1/submissions/:id/request-correction ──────────────────────────
+router.post("/:id/request-correction", async (req: AuthRequest, res: Response) => {
+  const { correctionRequests } = req.body;
+  if (!correctionRequests || typeof correctionRequests !== "object") {
+    res.status(400).json({ success: false, error: "Invalid correction requests format." });
+    return;
+  }
+
+  try {
+    const submission = await prisma.formSubmission.findUnique({
+      where: { id: req.params.id },
+      include: { template: true, submittedBy: true, signatories: true },
+    });
+
+    if (!submission) {
+      res.status(404).json({ success: false, error: "Submission not found" });
+      return;
+    }
+
+    const branch = req.user?.branch ?? "";
+    const role = (req.user?.user_role ?? "").toLowerCase();
+    const specialAccess = (req.user?.specialAccess ?? "").toLowerCase();
+    const isAdmin = role === "administrator" || role === "admin" || role === "superadmin" || specialAccess.includes("administrator");
+
+    if (!isAdmin) {
+      if (submission.status.startsWith("Assigned:") && submission.treatedBy !== branch) {
+          res.status(403).json({ success: false, error: "Not assigned to your branch." });
+          return;
+      }
+      if (submission.status === "Processing" && submission.template?.formTreater && submission.template.formTreater.toLowerCase() !== branch.toLowerCase()) {
+          res.status(403).json({ success: false, error: "Not assigned to your branch." });
+          return;
+      }
+    }
+
+    const updated = await prisma.formSubmission.update({
+      where: { id: req.params.id },
+      data: {
+        status: "Awaiting Correction",
+        correctionRequests: correctionRequests,
+      },
+    });
+
+    await prisma.formAuditTrail.create({
+      data: {
+        submissionId: updated.id,
+        formReference: submission.reference,
+        prevStatus: submission.status,
+        newStatus: "Awaiting Correction",
+        action: "Correction Requested",
+        actorName: req.user?.user_name || "Unknown",
+        actorEmail: req.user?.email || "Unknown",
+        note: `Requested correction for ${Object.keys(correctionRequests).length} fields.`,
+      },
+    });
+
+    // Notify the submitter via email if it's an external submission
+    if (submission.publicSubmitterEmail) {
+      try {
+        const baseUrl = process.env.FRONTEND_URL || "https://paperless-production-a511.up.railway.app";
+        const correctionUrl = `${baseUrl}/${submission.template.publicSlug}?mode=correction&ref=${submission.reference}&email=${encodeURIComponent(submission.publicSubmitterEmail)}`;
+        
+        await mailer.sendMail({
+          to: submission.publicSubmitterEmail,
+          subject: `Correction Required: ${submission.formName}`,
+          html: `
+            <p>Hello ${submission.publicSubmitterName || "Submitter"},</p>
+            <p>Your submission for <strong>${submission.formName}</strong> (Ref: ${submission.reference}) requires some corrections.</p>
+            <p>Please click the link below to review the feedback and update your submission:</p>
+            <p><a href="${correctionUrl}" style="display:inline-block;padding:10px 15px;background-color:#59000a;color:#ffffff;text-decoration:none;border-radius:5px;">Review & Correct Submission</a></p>
+            <p>If the button doesn't work, you can copy and paste this link into your browser:</p>
+            <p>${correctionUrl}</p>
+            <br/>
+            <p>Thank you,</p>
+            <p>FINCALite System</p>
+          `,
+        });
+      } catch (err) {
+        console.error("Failed to send correction email to external user:", err);
+      }
+    }
+
+    res.json({ success: true, data: updated });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: "Failed to request correction." });
+  }
+});
+
+// ── POST /api/v1/submissions/:id/submit-correction ───────────────────────────
+router.post("/:id/submit-correction", memUpload.any(), async (req: AuthRequest, res: Response) => {
+  let payload: any = {};
+  try {
+    if (req.body?.data) {
+      payload = JSON.parse(req.body.data);
+    } else {
+      payload = req.body;
+    }
+  } catch {
+    res.status(400).json({ success: false, error: "Invalid submission data." });
+    return;
+  }
+
+  const { formResponses: updatedResponses, initiatorSignature, initiatorToken } = payload;
+  if (!updatedResponses || typeof updatedResponses !== "object") {
+    res.status(400).json({ success: false, error: "Invalid updated responses format." });
+    return;
+  }
+
+  try {
+    const submission = await prisma.formSubmission.findUnique({
+      where: { id: req.params.id },
+      include: { template: true, auditTrail: { orderBy: { createdAt: "desc" }, take: 1 } },
+    });
+
+    if (!submission) {
+      res.status(404).json({ success: false, error: "Submission not found" });
+      return;
+    }
+
+    if (submission.status !== "Awaiting Correction") {
+      res.status(400).json({ success: false, error: "Submission is not awaiting correction." });
+      return;
+    }
+
+    if (submission.submittedById !== req.user?.id) {
+      res.status(403).json({ success: false, error: "Only the submitter can correct this submission." });
+      return;
+    }
+
+    let finalSignatureData = null;
+    let finalSignatureStatus = "Pending";
+    let finalSignedAt = null;
+
+    if (initiatorSignature) {
+      finalSignatureData = initiatorSignature;
+      finalSignatureStatus = "Signed";
+      finalSignedAt = new Date();
+    }
+
+    if (finalSignatureData) {
+      await prisma.submissionSignatory.updateMany({
+        where: { submissionId: submission.id, position: 1 },
+        data: {
+          signatureData: finalSignatureData,
+          signedAt: finalSignedAt,
+          status: finalSignatureStatus as any,
+        }
+      });
+    }
+
+    const mergedResponses = { ...(submission.formResponses as object), ...updatedResponses };
+
+    const uploadedFiles = (req.files as Express.Multer.File[]) ?? [];
+    if (uploadedFiles.length > 0) {
+      const formFolder = sanitiseFolder(submission.formName);
+      const refFolder = sanitiseFolder(submission.reference || submission.id);
+
+      const byField: Record<string, Express.Multer.File[]> = {};
+      for (const file of uploadedFiles) {
+        if (!byField[file.fieldname]) byField[file.fieldname] = [];
+        byField[file.fieldname].push(file);
+      }
+
+      for (const [fieldName, files] of Object.entries(byField)) {
+        const attachments = [];
+
+        for (const file of files) {
+          const folder = process.env.SHAREPOINT_UPLOAD_FOLDER
+            ? process.env.SHAREPOINT_UPLOAD_FOLDER + "/" + formFolder + "/" + refFolder
+            : formFolder + "/" + refFolder;
+
+          const storedPath = await uploadToSharePoint(
+            file.buffer,
+            file.originalname,
+            file.mimetype || "application/octet-stream",
+            folder
+          );
+
+          attachments.push({ isAttachment: true, name: file.originalname, url: "__pending__" });
+
+          await prisma.submissionDocument.create({
+            data: {
+              submissionId: submission.id,
+              fieldName,
+              originalName: file.originalname,
+              filePath: storedPath,
+              mimeType: file.mimetype || "application/octet-stream",
+              size: file.size,
+            }
+          });
+        }
+        
+        if (Array.isArray(mergedResponses[fieldName])) {
+           mergedResponses[fieldName] = mergedResponses[fieldName].concat(attachments);
+        } else {
+           mergedResponses[fieldName] = attachments;
+        }
+      }
+    }
+
+    const prevAudit = submission.auditTrail[0];
+    const newStatus = prevAudit ? prevAudit.prevStatus : "Processing";
+
+    const updated = await prisma.formSubmission.update({
+      where: { id: req.params.id },
+      data: {
+        formResponses: mergedResponses,
+        correctionRequests: Prisma.DbNull,
+        status: newStatus,
+      },
+    });
+
+    await prisma.formAuditTrail.create({
+      data: {
+        submissionId: updated.id,
+        formReference: submission.reference,
+        prevStatus: submission.status,
+        newStatus: newStatus,
+        action: "Correction Submitted",
+        actorName: req.user?.user_name || "Unknown",
+        actorEmail: req.user?.email || "Unknown",
+      },
+    });
+
+    res.json({ success: true, data: updated });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: "Failed to submit correction." });
+  }
 });
 
 export default router;
