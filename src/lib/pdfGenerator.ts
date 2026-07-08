@@ -582,7 +582,7 @@ export async function generateContractPdf(contractRequestId: string, drawnSignat
     include: { fields: true }
   });
 
-  if (!pdfTemplate || pdfTemplate.type !== "html" || !pdfTemplate.sharepointPath) {
+  if (!pdfTemplate || String(pdfTemplate.type).toLowerCase() !== "html" || !pdfTemplate.sharepointPath) {
     return null;
   }
 
@@ -645,12 +645,13 @@ export async function generateDynamicContractPdf(submissionId: string, templateI
 
   if (!submission) return null;
 
+  const resolvedTemplateId = templateId || (submission.template as any).contractTemplateId;
   const pdfTemplate = await prisma.pdfTemplate.findUnique({
-    where: { id: templateId },
+    where: { id: resolvedTemplateId },
     include: { fields: true }
   });
 
-  if (!pdfTemplate || pdfTemplate.type !== "html" || !pdfTemplate.sharepointPath) {
+  if (!pdfTemplate || String(pdfTemplate.type).toLowerCase() !== "html" || !pdfTemplate.sharepointPath) {
     return null;
   }
 
@@ -660,7 +661,8 @@ export async function generateDynamicContractPdf(submissionId: string, templateI
 
   // Extract templateMappings for this specific generated_contract field
   let fieldTemplateMappings: Record<string, string> = {};
-  const formFields = (submission.template as any)?.fields || [];
+  const tFields = (submission.template as any)?.fields;
+  const formFields = Array.isArray(tFields) ? tFields : typeof tFields === "string" ? JSON.parse(tFields) : [];
   for (const f of formFields) {
     if (f.label === fieldName && f.templateMappings) {
       fieldTemplateMappings = f.templateMappings;
@@ -711,43 +713,86 @@ export async function generateDraftSubmissionPdf(templateId: string, formRespons
     template: template
   };
 
-  const { buffer: pdfBuffer } = await downloadFromSharePoint(template.pdfTemplate.sharepointPath);
-  const pdfDoc = await PDFDocument.load(pdfBuffer);
-  const pages = pdfDoc.getPages();
-
+  const { buffer: fileBuffer } = await downloadFromSharePoint(template.pdfTemplate.sharepointPath);
+  
+  const formFields = Array.isArray(template.fields)
+    ? template.fields
+    : typeof template.fields === "string"
+      ? JSON.parse(template.fields)
+      : [];
   const pdfDataMapping: Record<string, any> = {};
-  const globalTemplateMappings = (template.templateMappings as Record<string, any>) || {};
-
-  const unified = await buildUnifiedContext(mockSubmission, pdfDataMapping);
-
-  for (const field of template.pdfTemplate.fields as any[]) {
-    const mappingPath = globalTemplateMappings[field.name] || field.mappingPath;
-    let val = pdfDataMapping[field.name];
-    if (!val && mappingPath && mappingPath !== "FormInput") {
-      val = resolveContextPath(mappingPath, unified);
-    }
-    if (!val) continue;
-
-    const pageIndex = field.page ?? 0;
-    if (pageIndex >= pages.length || pageIndex < 0) continue;
-    const pdfPage = pages[pageIndex];
-    const { width: pWidth, height: pHeight } = pdfPage.getSize();
-
-    const x = field.x * pWidth;
-    const y = (1 - field.y - field.height) * pHeight;
-
-    if (field.type === "text") {
-      pdfPage.drawText(String(val), {
-        x,
-        y,
-        size: field.fontSize || 12,
-        color: rgb(0, 0, 0),
-      });
+  
+  for (const ff of formFields) {
+    if (ff.mappedPdfField) {
+      pdfDataMapping[ff.mappedPdfField] = formResponses[ff.label] ?? formResponses[ff.id];
     }
   }
 
-  const generatedBytes = await pdfDoc.save();
-  return { buffer: Buffer.from(generatedBytes), filename: `Draft_${template.name}.pdf` };
+  const globalTemplateMappings = (template.templateMappings as Record<string, any>) || {};
+  const unified = await buildUnifiedContext(mockSubmission, pdfDataMapping);
+
+  if (String((template.pdfTemplate as any).type).toLowerCase() === "html") {
+    try {
+      const htmlSource = fileBuffer.toString("utf-8");
+
+      for (const field of template.pdfTemplate.fields as any[]) {
+        const mappingPath = globalTemplateMappings[field.name] || field.mappingPath;
+        if (!mappingPath || mappingPath === "FormInput") continue;
+        unified[field.name] = resolveContextPath(mappingPath, unified);
+      }
+
+      const compiled = Handlebars.compile(htmlSource);
+      const html = compiled(unified);
+
+      const browser = await launchBrowser();
+      const pg = await browser.newPage();
+      await pg.setContent(html, { waitUntil: "domcontentloaded", timeout: 15_000 });
+      const pdfBuffer = await pg.pdf({ format: "A4", printBackground: true });
+      await browser.close();
+
+      return { buffer: Buffer.from(pdfBuffer), filename: `Draft_${template.name.replace(/[^a-zA-Z0-9_-]+/g, "_")}.pdf` };
+    } catch (err) {
+      console.error("Failed generating draft HTML PDF:", err);
+      return null;
+    }
+  } else {
+    try {
+      const pdfDoc = await PDFDocument.load(fileBuffer);
+      const pages = pdfDoc.getPages();
+
+      for (const field of template.pdfTemplate.fields as any[]) {
+        const mappingPath = globalTemplateMappings[field.name] || field.mappingPath;
+        let val = pdfDataMapping[field.name];
+        if (!val && mappingPath && mappingPath !== "FormInput") {
+          val = resolveContextPath(mappingPath, unified);
+        }
+        if (!val) continue;
+
+        const pageIndex = field.page ?? 0;
+        if (pageIndex >= pages.length || pageIndex < 0) continue;
+        const pdfPage = pages[pageIndex];
+        const { width: pWidth, height: pHeight } = pdfPage.getSize();
+
+        const x = field.x * pWidth;
+        const y = (1 - field.y - field.height) * pHeight;
+
+        if (field.type === "text") {
+          pdfPage.drawText(String(val), {
+            x,
+            y,
+            size: field.fontSize || 12,
+            color: rgb(0, 0, 0),
+          });
+        }
+      }
+
+      const generatedBytes = await pdfDoc.save();
+      return { buffer: Buffer.from(generatedBytes), filename: `Draft_${template.name.replace(/[^a-zA-Z0-9_-]+/g, "_")}.pdf` };
+    } catch (err) {
+      console.error("Failed generating draft overlay PDF:", err);
+      return null;
+    }
+  }
 }
 
 export async function generateDraftDynamicContractPdf(templateId: string, formResponses: any, user: any, contractFieldName: string): Promise<{ buffer: Buffer, filename: string } | null> {
@@ -759,23 +804,39 @@ export async function generateDraftDynamicContractPdf(templateId: string, formRe
 
   let contractTemplateId = "";
   let fieldTemplateMappings: Record<string, string> = {};
-  const formFields = (template.fields as any[]) || [];
+  const formFields = Array.isArray(template.fields)
+    ? template.fields
+    : typeof template.fields === "string"
+      ? JSON.parse(template.fields)
+      : [];
   for (const f of formFields) {
     if (f.label === contractFieldName) {
-      contractTemplateId = f.templateId;
+      contractTemplateId = f.contractTemplateId || template.contractTemplateId || "";
       fieldTemplateMappings = f.templateMappings || {};
       break;
     }
   }
 
-  if (!contractTemplateId) return null;
+  if (!contractTemplateId) {
+    console.error("No contractTemplateId found! contractFieldName was:", contractFieldName, "formFields were:", formFields.map((f:any) => f.label));
+    return null;
+  }
 
   const pdfTemplate = await prisma.pdfTemplate.findUnique({
     where: { id: contractTemplateId },
     include: { fields: true }
   });
 
-  if (!pdfTemplate || pdfTemplate.type !== "html" || !pdfTemplate.sharepointPath) {
+  if (!pdfTemplate) {
+    console.error("No pdfTemplate found for contractTemplateId", contractTemplateId);
+    return null;
+  }
+  if (!pdfTemplate.sharepointPath) {
+    console.error("pdfTemplate missing sharepointPath");
+    return null;
+  }
+  if (String(pdfTemplate.type).toLowerCase() !== "html") {
+    console.error("pdfTemplate type is not html! It is:", pdfTemplate.type);
     return null;
   }
 

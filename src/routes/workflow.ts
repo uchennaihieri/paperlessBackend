@@ -69,6 +69,10 @@ export async function activatePrerequisite(prereqId: string, mainSubmissionId: s
       prefilledResponses[refField.id] = mainSub.reference;
     }
 
+    const { extractReferencedData } = await import("../lib/referencedData");
+    const referencedResponses = await extractReferencedData(targetFields, mainSubmissionId, prisma);
+    Object.assign(prefilledResponses, referencedResponses);
+
     // Replace the email with the Prerequisite Form Reference in the main form's responses
     const mainTemplate = await prisma.formTemplate.findUnique({ where: { id: mainSub.templateId } });
     if (mainTemplate && mainTemplate.fields) {
@@ -476,6 +480,23 @@ router.get("/submissions/:id", async (req, res: Response) => {
     },
   });
   if (!sub) { res.status(404).json({ success: false, error: "Not found", code: "NOT_FOUND" }); return; }
+
+  if (sub.status === "Draft" && sub.template?.fields && sub.prerequisiteFor?.mainSubmissionId) {
+    const templateFields = typeof sub.template.fields === "string" 
+      ? JSON.parse(sub.template.fields) 
+      : sub.template.fields;
+      
+    const { extractReferencedData } = await import("../lib/referencedData");
+    const referencedResponses = await extractReferencedData(templateFields as any[], sub.prerequisiteFor.mainSubmissionId, prisma);
+    
+    let resData = sub.formResponses as Record<string, any>;
+    if (typeof resData === "string") {
+      try { resData = JSON.parse(resData); } catch(e) { resData = {}; }
+    }
+    Object.assign(resData, referencedResponses);
+    sub.formResponses = resData;
+  }
+
   res.json({ success: true, data: sub });
 });
 

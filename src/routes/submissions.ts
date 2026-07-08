@@ -364,9 +364,27 @@ router.get("/:id", async (req, res: Response) => {
       submittedBy: { select: { user_name: true, finca_email: true, branch: true } },
       documents: true,
       contractRequests: true,
+      prerequisiteFor: true,
     },
   });
   if (!submission) { res.status(404).json({ success: false, error: "Submission not found", code: "SUBMISSION_NOT_FOUND" }); return; }
+
+  if (submission.status === "Draft" && submission.template?.fields && submission.prerequisiteFor?.mainSubmissionId) {
+    const templateFields = typeof submission.template.fields === "string" 
+      ? JSON.parse(submission.template.fields) 
+      : submission.template.fields;
+      
+    const { extractReferencedData } = await import("../lib/referencedData");
+    const referencedResponses = await extractReferencedData(templateFields as any[], submission.prerequisiteFor.mainSubmissionId, prisma);
+    
+    let resData = submission.formResponses as Record<string, any>;
+    if (typeof resData === "string") {
+      try { resData = JSON.parse(resData); } catch(e) { resData = {}; }
+    }
+    Object.assign(resData, referencedResponses);
+    submission.formResponses = resData;
+  }
+
   res.json({ success: true, data: submission });
 });
 
@@ -428,67 +446,21 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
   // ── Cross-form Data Referencing for Prerequisites ──────────────────────────
   if (draftId) {
     let mainSubmissionId: string | null = null;
-    let fetchedMainSubmission: any = null;
-    let fetchedPrereqs: any[] | null = null;
+    
+    // Lazy load the prerequisite root context
+    const selfPrereq = await prisma.submissionPrerequisite.findUnique({
+      where: { prereqSubmissionId: draftId }
+    });
+    
+    if (selfPrereq) {
+      mainSubmissionId = selfPrereq.mainSubmissionId;
+    }
 
-    for (const field of templateFields) {
-      if (field.description) {
-        const match = field.description.match(/View Referenced "(MainForm|Prerequisite\.\d+)\.(.+?)"/i);
-        if (match) {
-          const targetType = match[1]; // e.g. "MainForm" or "Prerequisite.1"
-          const targetLabel = match[2];
-
-          // Lazy load the prerequisite root context
-          if (mainSubmissionId === null) {
-            const selfPrereq = await prisma.submissionPrerequisite.findUnique({
-              where: { prereqSubmissionId: draftId }
-            });
-            if (selfPrereq) {
-              mainSubmissionId = selfPrereq.mainSubmissionId;
-            } else {
-              mainSubmissionId = "NONE"; // Mark to avoid re-querying
-            }
-          }
-
-          if (mainSubmissionId && mainSubmissionId !== "NONE") {
-            let targetFormResponses: any = null;
-
-            if (targetType.toLowerCase() === "mainform") {
-              if (!fetchedMainSubmission) {
-                fetchedMainSubmission = await prisma.formSubmission.findUnique({
-                  where: { id: mainSubmissionId }
-                });
-              }
-              if (fetchedMainSubmission) {
-                targetFormResponses = typeof fetchedMainSubmission.formResponses === "string" 
-                  ? JSON.parse(fetchedMainSubmission.formResponses) 
-                  : fetchedMainSubmission.formResponses;
-              }
-            } else {
-              const orderMatch = targetType.match(/Prerequisite\.(\d+)/i);
-              if (orderMatch) {
-                const targetOrder = parseInt(orderMatch[1], 10);
-                if (!fetchedPrereqs) {
-                  fetchedPrereqs = await prisma.submissionPrerequisite.findMany({
-                    where: { mainSubmissionId },
-                    include: { prereqSubmission: true }
-                  });
-                }
-                const targetPrereq = fetchedPrereqs.find(p => p.order === targetOrder);
-                if (targetPrereq && targetPrereq.prereqSubmission) {
-                  targetFormResponses = typeof targetPrereq.prereqSubmission.formResponses === "string"
-                    ? JSON.parse(targetPrereq.prereqSubmission.formResponses)
-                    : targetPrereq.prereqSubmission.formResponses;
-                }
-              }
-            }
-
-            // If we successfully found the value, inject it
-            if (targetFormResponses && targetFormResponses[targetLabel] !== undefined) {
-              formResponses[field.label] = targetFormResponses[targetLabel];
-            }
-          }
-        }
+    if (mainSubmissionId) {
+      const { extractReferencedData } = await import("../lib/referencedData");
+      const referencedResponses = await extractReferencedData(templateFields, mainSubmissionId, prisma);
+      for (const [key, value] of Object.entries(referencedResponses)) {
+        formResponses[key] = value;
       }
     }
   }
@@ -711,6 +683,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
   }
 
   // ── Handle tempPdfId / initiatorAnnotations ───────────────────────────────────
+  const processedContractFields = new Set<string>();
   if (tempPdfId) {
     try {
       const pdfTemp = await prisma.pdfTemp.findUnique({
@@ -747,6 +720,15 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
                 width: ann.width ?? 150,
                 height: ann.height ?? 50,
               });
+            } else if (ann.type === "text") {
+              const { rgb } = require('pdf-lib');
+              const size = ann.fontSize || 14;
+              pdfPage.drawText(ann.value || "", {
+                x: ann.x,
+                y: height - ann.y - size,
+                size: size,
+                color: rgb(0, 0, 0),
+              });
             }
           }
           
@@ -760,6 +742,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
             
         // Which field is it?
         const contractFieldLabel = signableDocumentFieldLabel || (generatedContractFields[0]?.label ?? "Contract");
+        processedContractFields.add(contractFieldLabel);
         const originalFilename = `Signed_${contractFieldLabel.replace(/[^a-zA-Z0-9]/g, "_")}.pdf`;
 
         const storedPath = await uploadToSharePoint(
@@ -945,6 +928,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
   if (generatedContractFields.length > 0) {
     for (const field of generatedContractFields) {
       if (!field.contractTemplateId) continue;
+      if (processedContractFields.has(field.label)) continue;
       
       try {
         await prisma.pdfJobQueue.create({
@@ -1168,6 +1152,10 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
           if (refField) {
             prefilledResponses[refField.id] = submission.reference;
           }
+
+          const { extractReferencedData } = await import("../lib/referencedData");
+          const referencedResponses = await extractReferencedData(targetFields, submission.id, prisma);
+          Object.assign(prefilledResponses, referencedResponses);
 
           const prereqSub = await prisma.formSubmission.create({
             data: {

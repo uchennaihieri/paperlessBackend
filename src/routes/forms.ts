@@ -487,7 +487,7 @@ router.post("/draft-pdf", async (req: AuthRequest, res: Response) => {
       }
     });
 
-    res.json({ success: true, tempPdfId: pdfTemp.id });
+    res.json({ success: true, tempPdfId: pdfTemp.id, data: { id: pdfTemp.id } });
   } catch (error: any) {
     console.error("Error generating draft PDF:", error);
     res.status(500).json({ success: false, error: error.message });
