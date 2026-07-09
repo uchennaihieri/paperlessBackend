@@ -4,6 +4,14 @@ import Handlebars from "handlebars";
 Handlebars.registerHelper("add", function (a, b) {
   return Number(a) + Number(b);
 });
+
+Handlebars.registerHelper("eq", function (a, b) {
+  return a === b;
+});
+
+Handlebars.registerHelper("neq", function (a, b) {
+  return a !== b;
+});
 import prisma from "./prisma";
 import { PDFDocument, rgb } from "pdf-lib";
 import { downloadFromSharePoint } from "./sharepoint";
@@ -54,6 +62,35 @@ function resolveContextPath(path: string, ctx: Record<string, any>): any {
 // ─────────────────────────────────────────────────────────────────────────────
 async function buildUnifiedContext(submission: any, pdfDataMapping: Record<string, any>) {
   const raw = submission.formResponses as Record<string, any>;
+
+  // Convert image attachments to base64 data URIs so they render properly in headless PDF engine
+  for (const key of Object.keys(raw)) {
+    const val = raw[key];
+    if (Array.isArray(val) && val.length > 0 && val[0]?.isAttachment) {
+      for (const att of val) {
+        if (att.url && att.url.includes("docId=")) {
+          const docIdMatch = att.url.match(/docId=([^&]+)/);
+          if (docIdMatch) {
+            try {
+              const doc = await prisma.submissionDocument.findUnique({ where: { id: docIdMatch[1] } });
+              if (doc && doc.filePath) {
+                const { buffer, mimeType } = await downloadFromSharePoint(doc.filePath);
+                
+                // Convert buffer to base64 data URI if it's an image
+                const mime = mimeType || "image/jpeg";
+                if (mime.startsWith("image/") || /\.(png|jpe?g|gif|webp)$/i.test(att.name)) {
+                  const b64 = buffer.toString("base64");
+                  att.url = `data:${mime.startsWith("image/") ? mime : "image/jpeg"};base64,${b64}`;
+                }
+              }
+            } catch (err) {
+              console.error(`Failed to fetch attachment ${att.name} for PDF base64 conversion:`, err);
+            }
+          }
+        }
+      }
+    }
+  }
 
   const templateFields = Array.isArray(submission.template?.fields)
     ? submission.template.fields
@@ -127,10 +164,29 @@ async function buildUnifiedContext(submission: any, pdfDataMapping: Record<strin
 
   const submitter = submission.submittedBy as any;
 
-  // For public form submissions, submittedBy is null — use publicSubmitter fields
   const resolvedSubmitterName   = submitter?.user_name  ?? submitter?.full_name ?? (submission as any).publicSubmitterName ?? "";
   const resolvedSubmitterEmail  = submitter?.finca_email ?? submitter?.email     ?? (submission as any).publicSubmitterEmail ?? "";
   const resolvedSubmitterBranch = submitter?.branch ?? "";
+
+  // Fetch submitter signature from signatories (to preserve the exact signature used at submission)
+  let submitterSignatureUrl = "";
+  if (resolvedSubmitterEmail) {
+    const submitterSig = (submission.signatories as any[]).find(
+      (s) => s.email.toLowerCase() === resolvedSubmitterEmail.toLowerCase()
+    );
+    if (submitterSig && submitterSig.signatureData) {
+      submitterSignatureUrl = submitterSig.signatureData;
+    }
+  }
+
+  const SubmitterData = {
+    name: resolvedSubmitterName,
+    email: resolvedSubmitterEmail,
+    branch: resolvedSubmitterBranch,
+    dateTime: new Date(submission.createdAt).toLocaleString("en-GB"),
+    signatureUrl: submitterSignatureUrl,
+    imageUrl: "" // Update if user photo support is added to the database
+  };
 
   // Fetch approved prerequisites and their forms
   const prereqs = await prisma.submissionPrerequisite.findMany({
@@ -232,6 +288,8 @@ async function buildUnifiedContext(submission: any, pdfDataMapping: Record<strin
     Questions,
     Responses: raw,
     formResponses: raw, // alias to support mapping paths like 'formResponses.VendorName'
+    TemplateFields: submission.template?.fields || [],
+    submitter: SubmitterData,
     Signatories,
     Prerequisites,
     Contract,
