@@ -64,7 +64,11 @@ router.get("/", async (req: AuthRequest, res: Response) => {
     });
     const templateIds = accessRecords.map(a => a.templateId);
     
-    const whereClause: any = { isInternal: false };
+    const whereClause: any = { 
+      isInternal: false,
+      isHidden: false,
+      isActive: true
+    };
     if (branch) {
       whereClause.OR = [
         { id: { in: templateIds } },
@@ -211,7 +215,11 @@ router.get("/excel-enabled", async (req: AuthRequest, res: Response) => {
     });
     const templateIds = accessRecords.map(a => a.templateId);
     
-    const whereClause: any = { generatesExcel: true };
+    const whereClause: any = { 
+      generatesExcel: true,
+      isHidden: false,
+      isActive: true
+    };
     if (branch) {
       whereClause.OR = [
         { id: { in: templateIds } },
@@ -243,6 +251,11 @@ router.get("/:id", async (req: AuthRequest, res: Response) => {
   const email = req.user?.email?.toLowerCase() ?? "";
 
   if (!isAdmin) {
+    if (!template.isActive) {
+      res.status(403).json({ success: false, error: "This form has been deactivated.", code: "FORM_DEACTIVATED" });
+      return;
+    }
+
     const branch = req.user?.branch ?? "";
     
     // Check if the user's branch matches the form owner
@@ -341,6 +354,24 @@ router.patch("/:id", requireAdmin as any, async (req: AuthRequest, res: Response
     } else {
       throw err;
     }
+  }
+});
+
+// ── PATCH /api/v1/forms/:id/visibility ─────────────────────────────────────────
+router.patch("/:id/visibility", requireAdmin as any, async (req: AuthRequest, res: Response) => {
+  const { isHidden, isActive } = req.body;
+  try {
+    const data: any = {};
+    if (isHidden !== undefined) data.isHidden = isHidden;
+    if (isActive !== undefined) data.isActive = isActive;
+
+    const template = await prisma.formTemplate.update({
+      where: { id: req.params.id },
+      data,
+    });
+    res.json({ success: true, data: template });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: "Failed to update form visibility.", code: "FAILED_TO_UPDATE_VISIBILITY" });
   }
 });
 

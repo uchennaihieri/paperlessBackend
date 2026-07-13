@@ -67,6 +67,8 @@ model FormTemplate {
   isInternal             Boolean                  @default(false)
   contractTemplateId     String?
   needsContract          Boolean                  @default(false)
+  isHidden               Boolean                  @default(false)
+  isActive               Boolean                  @default(true)
   generatesExcel         Boolean                  @default(false)
   formTreaterRole        String?
   automatedSignatories   Json?

@@ -433,6 +433,12 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
 
   // ── Fetch Template and Check for Signable Document ─────────────────────────
   const template = await prisma.formTemplate.findUnique({ where: { id: templateId } });
+
+  if (template && !template.isActive) {
+    res.status(403).json({ success: false, error: "This form has been deactivated and can no longer be submitted.", code: "FORM_DEACTIVATED" });
+    return;
+  }
+
   const templateFields: any[] = typeof template?.fields === "string"
     ? JSON.parse(template.fields) : (template?.fields ?? []);
 

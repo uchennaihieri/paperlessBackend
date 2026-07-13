@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "FormTemplate" ADD COLUMN "isHidden" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN "isActive" BOOLEAN NOT NULL DEFAULT true;

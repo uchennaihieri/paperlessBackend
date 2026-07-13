@@ -88,6 +88,11 @@ router.get("/slug/:slug", async (req: Request, res: Response) => {
     return;
   }
 
+  if (!template.isActive) {
+    res.status(403).json({ success: false, error: "This form has been deactivated.", code: "FORM_DEACTIVATED" });
+    return;
+  }
+
   // Hide internal fields, but return enough to render the form builder fields
   const safeTemplate = {
     id: template.id,
@@ -129,6 +134,11 @@ router.post("/submit/:slug", memUpload.any(), async (req: Request, res: Response
 
   if (!template || !template.isPublic) {
     res.status(404).json({ success: false, error: "Form not found or not public", code: "FORM_NOT_FOUND" });
+    return;
+  }
+
+  if (!template.isActive) {
+    res.status(403).json({ success: false, error: "This form has been deactivated and can no longer be submitted.", code: "FORM_DEACTIVATED" });
     return;
   }
 
