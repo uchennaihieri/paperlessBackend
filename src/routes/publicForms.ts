@@ -3,7 +3,7 @@ import multer from "multer";
 import path from "path";
 import prisma from "../lib/prisma";
 import { Prisma } from "@prisma/client";
-import { notifyActiveSignatories, notifySuccessfulCompletion } from "./workflow";
+import { notifyActiveSignatories, notifySuccessfulCompletion, notifyTreaters } from "./workflow";
 import { isSharePointEnabled, uploadToSharePoint } from "../lib/sharepoint";
 
 // Files are always buffered in memory; they go straight to SharePoint (or disk)
@@ -279,6 +279,9 @@ router.post("/submit/:slug", memUpload.any(), async (req: Request, res: Response
     } else if (initialStatus === "Completed" || initialStatus === "Processing") {
       if (initialStatus === "Completed") {
         notifySuccessfulCompletion(submission.id).catch(console.error);
+      }
+      if (initialStatus === "Processing") {
+        notifyTreaters(submission.id).catch(console.error);
       }
       
       // Auto-generate PDF for public forms that require no signatories (Completed) or have treaters (Processing)
@@ -561,6 +564,8 @@ router.post("/submit-token/:token", memUpload.any(), async (req: Request, res: R
       notifyActiveSignatories(submission.id).catch(console.error);
     } else if (initialStatus === "Completed") {
       notifySuccessfulCompletion(submission.id).catch(console.error);
+    } else if (initialStatus === "Processing") {
+      notifyTreaters(submission.id).catch(console.error);
     }
 
     await prisma.formAuditTrail.create({

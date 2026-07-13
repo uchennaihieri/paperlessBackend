@@ -8,7 +8,7 @@ import { authenticate, AuthRequest } from "../middleware/authenticate";
 import { hashToken, decrypt } from "../lib/crypto";
 import { isSharePointEnabled, uploadToSharePoint, downloadFromSharePoint } from "../lib/sharepoint";
 import { mailer } from "../lib/mailer";
-import { checkAndUnblockPrerequisites, notifyActiveSignatories, notifySuccessfulCompletion, notifySubmitterOfSubmission } from "./workflow";
+import { checkAndUnblockPrerequisites, notifyActiveSignatories, notifySuccessfulCompletion, notifySubmitterOfSubmission, notifyTreaters } from "./workflow";
 
 // Files are always buffered in memory; they go straight to SharePoint (or disk)
 // on submission — never stored in a temp location.
@@ -1074,6 +1074,8 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
           notifyActiveSignatories(submission.id);
         } else if (initialStatus === "Completed") {
           notifySuccessfulCompletion(submission.id);
+        } else if (initialStatus === "Processing") {
+          notifyTreaters(submission.id);
         }
         return;
       }
@@ -1242,6 +1244,8 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
           notifyActiveSignatories(submission.id);
         } else if (initialStatus === "Completed") {
           notifySuccessfulCompletion(submission.id);
+        } else if (initialStatus === "Processing") {
+          notifyTreaters(submission.id);
         }
       }
     } catch (err) {

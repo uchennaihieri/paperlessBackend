@@ -223,6 +223,8 @@ export async function checkAndUnblockPrerequisites(completedSubmissionId?: strin
 
         if (newStatus === "Completed") {
           notifySuccessfulCompletion(prereqLink.mainSubmissionId);
+        } else if (newStatus === "Processing") {
+          notifyTreaters(prereqLink.mainSubmissionId);
         }
 
         // Queue PDF now that prerequisites are cleared and signers are done
@@ -1064,6 +1066,8 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
   // Trigger notifications based on new status
   if (newSignStatus === "Completed") {
     notifySuccessfulCompletion(req.params.id);
+  } else if (newSignStatus === "Processing") {
+    notifyTreaters(req.params.id);
   } else if (newSignStatus === "In-review" && currentForSign?.signingType === "sequential") {
     notifyActiveSignatories(req.params.id);
   }
@@ -1702,6 +1706,83 @@ export async function notifySubmitterOfSubmission(submissionId: string) {
     }).catch((e: any) => console.error("[notify submitter email error]", e));
   } catch (err) {
     console.error("[notifySubmitterOfSubmission] error:", err);
+  }
+}
+
+export async function notifyTreaters(submissionId: string) {
+  try {
+    const submission = await prisma.formSubmission.findUnique({
+      where: { id: submissionId },
+      include: {
+        template: { select: { formTreater: true, formTreaterRole: true } },
+        submittedBy: { select: { user_name: true, finca_email: true } },
+      },
+    });
+    if (!submission) return;
+
+    const treaterBranch = submission.template?.formTreater;
+    if (!treaterBranch || treaterBranch.toLowerCase() === "none") return;
+
+    const treaterRole = submission.template?.formTreaterRole;
+
+    // Find all users in the treater branch (and optionally matching role)
+    const whereClause: any = {
+      branch: { equals: treaterBranch, mode: "insensitive" },
+      finca_email: { not: null },
+    };
+    if (treaterRole && treaterRole.trim() !== "") {
+      whereClause.user_role = { equals: treaterRole, mode: "insensitive" };
+    }
+
+    const treaters = await prisma.user.findMany({
+      where: whereClause,
+      select: { user_name: true, finca_email: true, notificationPreferences: true },
+    });
+
+    const submitterName = submission.submittedBy?.user_name ?? "A colleague";
+    const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
+
+    const eligibleTreaters = treaters.filter((t) => {
+      if (!t.finca_email) return false;
+      const prefs = t.notificationPreferences as any;
+      if (!prefs?.patterns) return false; // default is false, so no prefs = no notification
+      return prefs.patterns.onBusinessUnitTreat === true;
+    });
+
+    if (eligibleTreaters.length === 0) return;
+
+    console.info(`[notifyTreaters] Sending treatment notification for submission ${submissionId} to: ${eligibleTreaters.map((t) => t.finca_email).join(", ")}`);
+
+    for (const treater of eligibleTreaters) {
+      mailer.sendMail({
+        from: `FINCALite <${process.env.SMTP_FROM ?? process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
+        to: treater.finca_email!,
+        subject: `Action Required: "${submission.formName}" is ready for treatment`,
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
+            <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
+            <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
+            <hr style="border-color: #e5e7eb; margin: 20px 0;" />
+            <p style="font-size: 15px; color: #111827;">Hi <strong>${treater.user_name ?? "there"}</strong>,</p>
+            <p style="font-size: 14px; color: #374151;">
+              A form submission has been fully signed and is now ready for processing by your unit.
+            </p>
+            <div style="background: #f9fafb; border-left: 4px solid #B50938; border-radius: 4px; padding: 16px; margin: 16px 0;">
+              <p style="margin: 0; font-weight: 600; color: #111827;">${submission.formName}</p>
+              <p style="margin: 4px 0 0; font-size: 13px; color: #6b7280;">Reference: ${submission.reference ?? "N/A"}</p>
+              <p style="margin: 4px 0 0; font-size: 13px; color: #6b7280;">Submitted by: ${submitterName}</p>
+            </div>
+            <p style="font-size: 14px; color: #374151;">Please log in to the FINCALite platform to review and process this submission.</p>
+            <a href="${appUrl}/dashboard/action-center" style="display: inline-block; background: #B50938; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; margin-top: 8px;">Go to Action Center</a>
+            <p style="font-size: 12px; color: #9ca3af; margin-top: 24px;">If you believe this was sent in error, please contact your administrator.</p>
+          </div>
+        `,
+      }).then(() => {
+        console.info(`[notifyTreaters] Treatment notification email successfully sent to ${treater.finca_email}`);
+      }).catch((e: any) => console.error("[notify treaters email error]", e));
+    }
+  } catch (err) {
+    console.error("[notifyTreaters] error:", err);
   }
 }
 
