@@ -525,6 +525,29 @@ router.post("/draft-pdf", async (req: AuthRequest, res: Response) => {
   }
 });
 
+// ── POST /api/v1/forms/draft-pdf/upload ──────────────────────────────────────
+// Accepts a raw PDF file upload (for signable_document fields) and stores it in PdfTemp.
+import multer from "multer";
+const draftUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+
+router.post("/draft-pdf/upload", draftUpload.single("file"), async (req: AuthRequest, res: Response) => {
+  const file = (req as any).file as Express.Multer.File | undefined;
+  if (!file) {
+    res.status(400).json({ success: false, error: "No file uploaded." });
+    return;
+  }
+
+  try {
+    const pdfTemp = await prisma.pdfTemp.create({
+      data: { pdfBuffer: file.buffer }
+    });
+    res.json({ success: true, data: { id: pdfTemp.id } });
+  } catch (error: any) {
+    console.error("Error storing uploaded PDF:", error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // ── GET /api/v1/forms/draft-pdf/:id ──────────────────────────────────────────
 router.get("/draft-pdf/:id", async (req: any, res: Response) => {
   try {
