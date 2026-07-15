@@ -1666,23 +1666,44 @@ router.post("/:id/submit-correction", memUpload.any(), async (req: AuthRequest, 
     }
 
     let finalSignatureData = null;
-    let finalSignatureStatus = "Pending";
-    let finalSignedAt = null;
 
     if (initiatorSignature) {
       finalSignatureData = initiatorSignature;
-      finalSignatureStatus = "Signed";
-      finalSignedAt = new Date();
+    } else if (initiatorToken) {
+      const userEmail = req.user?.email;
+      if (!userEmail) { 
+        res.status(401).json({ success: false, error: "Not logged in", code: "NOT_LOGGED_IN" }); 
+        return; 
+      }
+      const hashedInput = hashToken(initiatorToken);
+      const secData = await prisma.securityData.findFirst({
+        where: { userEmail: { equals: userEmail, mode: "insensitive" } },
+      });
+      if (!secData || secData.hashedToken !== hashedInput) {
+        res.status(400).json({ success: false, error: "Invalid signature token.", code: "INVALID_SIGNATURE_TOKEN" });
+        return;
+      }
+      finalSignatureData = decrypt(secData.encryptedSignature);
     }
 
     if (finalSignatureData) {
-      await prisma.submissionSignatory.updateMany({
-        where: { submissionId: submission.id, position: 1 },
+      // Find the current highest position for this submission
+      const lastSig = await prisma.submissionSignatory.findFirst({
+        where: { submissionId: submission.id },
+        orderBy: { position: "desc" },
+      });
+      const nextPosition = (lastSig?.position ?? 0) + 1;
+
+      await prisma.submissionSignatory.create({
         data: {
+          submissionId: submission.id,
+          position: nextPosition,
+          userName: `Corrected by - ${req.user?.user_name || "Unknown"}`,
+          email: req.user?.email || "",
           signatureData: finalSignatureData,
-          signedAt: finalSignedAt,
-          status: finalSignatureStatus as any,
-        }
+          signedAt: new Date(),
+          status: "Signed",
+        },
       });
     }
 
