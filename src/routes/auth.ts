@@ -61,7 +61,6 @@ router.post("/login", async (req: Request, res: Response) => {
   // ── Send OTP ──────────────────────────────────────────────────────────────
   const email = user.finca_email!;
   const otp = crypto.randomInt(100000, 999999).toString();
-  console.log(`[OTP] Generated Login OTP for ${email}: ${otp}`);
   const expires = new Date();
   expires.setMinutes(expires.getMinutes() + 10);
 
@@ -86,6 +85,7 @@ router.post("/login", async (req: Request, res: Response) => {
         </div>
       `,
     });
+    console.log(`[OTP] Successfully sent Login OTP email to ${email}`);
   } catch (err: any) {
     console.error("OTP mail error:", err);
     res.status(500).json({ success: false, error: "Failed to send OTP. Please try again.", code: "FAILED_TO_SEND_OTP_PLEASE_TRY" });
@@ -170,7 +170,6 @@ router.post("/forgot-password", async (req: Request, res: Response) => {
   // ── Send OTP ──────────────────────────────────────────────────────────────
   const email = user.finca_email;
   const otp = crypto.randomInt(100000, 999999).toString();
-  console.log(`[OTP] Generated Password Reset OTP for ${email}: ${otp}`);
   const expires = new Date();
   expires.setMinutes(expires.getMinutes() + 10);
 
@@ -195,6 +194,7 @@ router.post("/forgot-password", async (req: Request, res: Response) => {
         </div>
       `,
     });
+    console.log(`[OTP] Successfully sent Password Reset OTP email to ${email}`);
   } catch (err: any) {
     console.error("OTP mail error:", err);
     res.status(500).json({ success: false, error: "Failed to send OTP. Please try again.", code: "FAILED_TO_SEND_OTP_PLEASE_TRY" });
