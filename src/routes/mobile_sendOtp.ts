@@ -26,6 +26,7 @@ router.post("/", async (req: Request, res: Response) => {
   }
 
   const otp = crypto.randomInt(100000, 999999).toString();
+  console.log(`[OTP] Generated Mobile OTP for ${email}: ${otp}`);
   const expires = new Date();
   expires.setMinutes(expires.getMinutes() + 10);
 

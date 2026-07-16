@@ -61,6 +61,7 @@ router.post("/login", async (req: Request, res: Response) => {
   // ── Send OTP ──────────────────────────────────────────────────────────────
   const email = user.finca_email!;
   const otp = crypto.randomInt(100000, 999999).toString();
+  console.log(`[OTP] Generated Login OTP for ${email}: ${otp}`);
   const expires = new Date();
   expires.setMinutes(expires.getMinutes() + 10);
 
@@ -169,6 +170,7 @@ router.post("/forgot-password", async (req: Request, res: Response) => {
   // ── Send OTP ──────────────────────────────────────────────────────────────
   const email = user.finca_email;
   const otp = crypto.randomInt(100000, 999999).toString();
+  console.log(`[OTP] Generated Password Reset OTP for ${email}: ${otp}`);
   const expires = new Date();
   expires.setMinutes(expires.getMinutes() + 10);
 
