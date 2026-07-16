@@ -338,8 +338,8 @@ router.get("/prefill-candidates/:templateId", async (req, res: Response) => {
 // Resolve a form reference code (e.g. "PCL001") to a full submission record.
 // Used by the frontend to turn a "formreference" field value into a clickable link.
 router.get("/by-reference/:ref", async (req, res: Response) => {
-  const submission = await prisma.formSubmission.findUnique({
-    where: { reference: req.params.ref },
+  const submission = await prisma.formSubmission.findFirst({
+    where: { reference: { equals: req.params.ref, mode: "insensitive" } },
     include: {
       signatories: { orderBy: { position: "asc" } },
       template: true,

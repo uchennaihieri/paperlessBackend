@@ -746,8 +746,8 @@ router.post("/verify-correction", async (req: Request, res: Response) => {
   }
 
   try {
-    const submission = await prisma.formSubmission.findUnique({
-      where: { reference },
+    const submission = await prisma.formSubmission.findFirst({
+      where: { reference: { equals: reference, mode: "insensitive" } },
       include: { template: true, signatories: { orderBy: { position: "asc" }, take: 1 } },
     });
 
