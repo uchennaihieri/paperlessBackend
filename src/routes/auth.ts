@@ -69,7 +69,7 @@ router.post("/login", async (req: Request, res: Response) => {
 
   try {
     await mailer.sendMail({
-      from: `FINCALite <${process.env.SMTP_USER}>`,
+      from: `FINCALite <${process.env.SMTP_FROM}>`,
       to: email,
       subject: "FINCALite – Your Login OTP",
       html: `
@@ -178,7 +178,7 @@ router.post("/forgot-password", async (req: Request, res: Response) => {
 
   try {
     await mailer.sendMail({
-      from: `FINCALite <${process.env.SMTP_USER}>`,
+      from: `FINCALite <${process.env.SMTP_FROM}>`,
       to: email,
       subject: "FINCALite – Your Password Reset OTP",
       html: `
@@ -528,7 +528,7 @@ router.patch("/devices/:id", authenticate as any, requireAdmin as any, async (re
   // Notify user of decision
   if (device.user.finca_email) {
     mailer.sendMail({
-      from: `FINCALite <${process.env.SMTP_USER}>`,
+      from: `FINCALite <${process.env.SMTP_FROM}>`,
       to: device.user.finca_email,
       subject: `FINCALite – Device ${status}`,
       html: `
