@@ -37,9 +37,9 @@ router.get("/", async (req, res: Response) => {
     where.createdAt = { gte: from, lte: to };
   }
 
-  // 1. Group by submissionId to get the latest createdAt for each form
+  // 1. Group by formReference to get the latest createdAt for each form/check
   const latestGroups = await prisma.formAuditTrail.groupBy({
-    by: ['submissionId'],
+    by: ['formReference'],
     _max: { createdAt: true },
     where,
     orderBy: { _max: { createdAt: 'desc' } },
@@ -51,7 +51,7 @@ router.get("/", async (req, res: Response) => {
   let records: any[] = [];
   if (latestGroups.length > 0) {
     const orConditions = latestGroups.map(g => ({
-      submissionId: g.submissionId,
+      formReference: g.formReference,
       createdAt: g._max.createdAt!
     }));
 
@@ -63,7 +63,7 @@ router.get("/", async (req, res: Response) => {
 
   // 3. Count total unique submissions for pagination metadata
   const totalGroups = await prisma.formAuditTrail.groupBy({
-    by: ['submissionId'],
+    by: ['formReference'],
     where
   });
   const total = totalGroups.length;
@@ -80,21 +80,21 @@ router.get("/", async (req, res: Response) => {
   });
 });
 
-// ── GET /api/v1/audit/:submissionId ──────────────────────────────────────────
+// ── GET /api/v1/audit/:formReference ──────────────────────────────────────────
 // Full trail for one submission, from 1st activity to the latest (oldest first).
-router.get("/:submissionId", async (req, res: Response) => {
-  const submission = await prisma.formSubmission.findUnique({
-    where: { id: req.params.submissionId },
+router.get("/:formReference", async (req, res: Response) => {
+  const exists = await prisma.formAuditTrail.findFirst({
+    where: { formReference: req.params.formReference },
     select: { id: true },
   });
 
-  if (!submission) {
-    res.status(404).json({ success: false, error: "Submission not found", code: "SUBMISSION_NOT_FOUND" });
+  if (!exists) {
+    res.status(404).json({ success: false, error: "Audit trail not found", code: "TRAIL_NOT_FOUND" });
     return;
   }
 
   const trail = await prisma.formAuditTrail.findMany({
-    where: { submissionId: req.params.submissionId },
+    where: { formReference: req.params.formReference },
     orderBy: { createdAt: "asc" }, // 1st activity to latest
   });
 

@@ -116,8 +116,8 @@ model FormSubmission {
 }
 
 model FormAuditTrail {
-  id            String         @id @default(cuid())
-  submissionId  String
+  id            String          @id @default(cuid())
+  submissionId  String?
   formReference String?
   prevStatus    String
   newStatus     String
@@ -125,8 +125,8 @@ model FormAuditTrail {
   actorName     String?
   actorEmail    String?
   note          String?
-  createdAt     DateTime       @default(now())
-  submission    FormSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  createdAt     DateTime        @default(now())
+  submission    FormSubmission? @relation(fields: [submissionId], references: [id], onDelete: Cascade)
 
   @@map("form_audit_trail")
 }

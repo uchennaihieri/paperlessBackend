@@ -33,24 +33,38 @@ async function generateReference(prefix: string): Promise<string> {
 async function logToAuditTrail(
   submissionId: string | undefined,
   user: any,
-  actionMsg: string
+  actionMsg: string,
+  checkReference?: string
 ) {
-  if (!submissionId) return;
   try {
-    const form = await prisma.formSubmission.findUnique({ where: { id: submissionId } });
-    if (!form) return;
-    await prisma.formAuditTrail.create({
-      data: {
-        submissionId: form.id,
-        formReference: form.reference,
-        prevStatus: form.status,
-        newStatus: form.status,
-        action: "identity_verified",
-        actorName: user?.user_name || "Unknown",
-        actorEmail: user?.email || "Unknown",
-        note: actionMsg,
-      },
-    });
+    if (submissionId) {
+      const form = await prisma.formSubmission.findUnique({ where: { id: submissionId } });
+      if (!form) return;
+      await prisma.formAuditTrail.create({
+        data: {
+          submissionId: form.id,
+          formReference: form.reference,
+          prevStatus: form.status,
+          newStatus: form.status,
+          action: "identity_verified",
+          actorName: user?.user_name || "Unknown",
+          actorEmail: user?.email || "Unknown",
+          note: actionMsg,
+        },
+      });
+    } else {
+      await prisma.formAuditTrail.create({
+        data: {
+          formReference: checkReference || null,
+          prevStatus: "N/A",
+          newStatus: "N/A",
+          action: "identity_verified",
+          actorName: user?.user_name || "Unknown",
+          actorEmail: user?.email || "Unknown",
+          note: actionMsg,
+        },
+      });
+    }
   } catch (err) {
     logger.error(`Failed to write to audit trail for ${submissionId}:`, err);
   }
@@ -176,7 +190,7 @@ router.post("/bvn/:idNumber", async (req: AuthRequest, res: Response) => {
         }
       });
 
-      await logToAuditTrail(submissionId, req.user, `BVN Record Cloned for ${sourceLog.subjectName} [${reference}]`);
+      await logToAuditTrail(submissionId, req.user, `BVN Record Cloned for ${sourceLog.subjectName} [${reference}]`, reference);
 
       res.json({
         success: true,
@@ -194,72 +208,30 @@ router.post("/bvn/:idNumber", async (req: AuthRequest, res: Response) => {
     }
 
     // 1. Check Cache
-    let existingLog = null;
-    if (!forceNew) {
-      existingLog = await prisma.identityVerificationLog.findFirst({
-        where: { idType: "bvn", idNumber, createdAt: { gte: cutoffTime } },
-        orderBy: { createdAt: "desc" },
-      });
-    }
+    const existingLog = await prisma.identityVerificationLog.findFirst({
+      where: { idType: "bvn", idNumber },
+      orderBy: { createdAt: "desc" },
+    });
 
     let data: any;
     let reference: string;
     let status = "Verified";
+    let newLog: any;
 
-    if (existingLog) {
-      data = existingLog.responseData;
-      status = existingLog.status;
-      reference = await generateReference("BVN");
-      
-      const newLog = await prisma.identityVerificationLog.create({
-        data: {
-          reference,
-          idType: "bvn",
-          idNumber,
-          subjectName: existingLog.subjectName,
-          status,
-          requestData: { firstname, lastname, dob, phone, email, gender },
-          responseData: data as any,
-          verifiedBy: currentUserEmail,
-        },
-      });
-
-      // Generate PDF in background
-      setImmediate(async () => {
-        try {
-          const pdfPath = await generateIdentityReportPdf({
-            reference,
-            idType: "bvn",
-            idNumber,
-            subjectName: existingLog.subjectName,
-            status,
-            verifiedBy: currentUserEmail,
-            checkedAt: newLog.createdAt,
-            requestData: { firstname, lastname, dob, phone, email, gender },
-            responseData: data as any,
-          });
-          await prisma.identityVerificationLog.update({
-            where: { id: newLog.id },
-            data: { pdfPath },
-          });
-        } catch (e) {
-          logger.error("Failed to generate cached BVN PDF report:", e);
-        }
-      });
-
-      await logToAuditTrail(submissionId, req.user, `BVN Verified (Cached) for ${existingLog.subjectName} [${reference}]`);
+    if (!forceNew && existingLog && existingLog.createdAt >= cutoffTime) {
+      await logToAuditTrail(submissionId, req.user, `BVN Verified (Cached) for ${existingLog.subjectName} [${existingLog.reference}]`, existingLog.reference);
       
       res.json({
         success: true,
-        data,
-        reference,
-        status,
-        id: newLog.id,
-        idType: newLog.idType,
-        idNumber: newLog.idNumber,
-        subjectName: newLog.subjectName,
-        verifiedBy: newLog.verifiedBy,
-        createdAt: newLog.createdAt.toISOString()
+        data: existingLog.responseData,
+        reference: existingLog.reference,
+        status: existingLog.status,
+        id: existingLog.id,
+        idType: existingLog.idType,
+        idNumber: existingLog.idNumber,
+        subjectName: existingLog.subjectName,
+        verifiedBy: existingLog.verifiedBy,
+        createdAt: existingLog.createdAt.toISOString()
       });
       return;
     } else {
@@ -273,29 +245,48 @@ router.post("/bvn/:idNumber", async (req: AuthRequest, res: Response) => {
         data = { error: err.message };
       }
 
-      // 3. Generate reference and cache
-      reference = await generateReference("BVN");
-      const newLog = await prisma.identityVerificationLog.create({
-        data: {
-          reference,
-          idType: "bvn",
-          idNumber,
-          subjectName: `${firstname} ${lastname}`,
-          status,
-          requestData: { firstname, lastname, dob, phone, email, gender },
-          responseData: data as any,
-          verifiedBy: currentUserEmail,
-        },
-      });
+      reference = existingLog ? existingLog.reference : await generateReference("BVN");
+      let subjectName = existingLog && !firstname ? existingLog.subjectName : `${firstname} ${lastname}`;
 
-      // 4. Generate PDF in background
+      if (existingLog) {
+        if (existingLog.pdfPath) {
+          try { fs.unlinkSync(existingLog.pdfPath); } catch {}
+        }
+        newLog = await prisma.identityVerificationLog.update({
+          where: { id: existingLog.id },
+          data: {
+            reference,
+            subjectName,
+            status,
+            requestData: { firstname, lastname, dob, phone, email, gender },
+            responseData: data as any,
+            verifiedBy: currentUserEmail,
+            pdfPath: null,
+            createdAt: new Date()
+          },
+        });
+      } else {
+        newLog = await prisma.identityVerificationLog.create({
+          data: {
+            reference,
+            idType: "bvn",
+            idNumber,
+            subjectName,
+            status,
+            requestData: { firstname, lastname, dob, phone, email, gender },
+            responseData: data as any,
+            verifiedBy: currentUserEmail,
+          },
+        });
+      }
+
       setImmediate(async () => {
         try {
           const pdfPath = await generateIdentityReportPdf({
             reference,
             idType: "bvn",
             idNumber,
-            subjectName: `${firstname} ${lastname}`,
+            subjectName,
             status,
             verifiedBy: currentUserEmail,
             checkedAt: newLog.createdAt,
@@ -311,8 +302,7 @@ router.post("/bvn/:idNumber", async (req: AuthRequest, res: Response) => {
         }
       });
 
-      // 4. Log to Audit Trail if tied to a submission
-      await logToAuditTrail(submissionId, req.user, `BVN Verified for ${firstname} ${lastname} [${reference}]`);
+      await logToAuditTrail(submissionId, req.user, `BVN Verified (Fresh) for ${subjectName} [${reference}]`, reference);
 
       res.json({
         success: true,
@@ -393,7 +383,7 @@ router.post("/nin/:idNumber", async (req: AuthRequest, res: Response) => {
         }
       });
 
-      await logToAuditTrail(submissionId, req.user, `NIN Record Cloned for ${sourceLog.subjectName} [${reference}]`);
+      await logToAuditTrail(submissionId, req.user, `NIN Record Cloned for ${sourceLog.subjectName} [${reference}]`, reference);
 
       res.json({
         success: true,
@@ -410,73 +400,31 @@ router.post("/nin/:idNumber", async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    // 1. Check Cache
-    let existingLog = null;
-    if (!forceNew) {
-      existingLog = await prisma.identityVerificationLog.findFirst({
-        where: { idType: "nin", idNumber, createdAt: { gte: cutoffTime } },
-        orderBy: { createdAt: "desc" },
-      });
-    }
+    // 1. Fetch existing log
+    const existingLog = await prisma.identityVerificationLog.findFirst({
+      where: { idType: "nin", idNumber },
+      orderBy: { createdAt: "desc" },
+    });
 
     let data: any;
     let reference: string;
     let status = "Verified";
+    let newNinLog: any;
 
-    if (existingLog) {
-      data = existingLog.responseData;
-      status = existingLog.status;
-      reference = await generateReference("NIN");
-
-      const newNinLog = await prisma.identityVerificationLog.create({
-        data: {
-          reference,
-          idType: "nin",
-          idNumber,
-          subjectName: existingLog.subjectName,
-          status,
-          requestData: { firstname, lastname, middlename, dob, phone, email, gender },
-          responseData: data as any,
-          verifiedBy: currentUserEmail,
-        },
-      });
-
-      // Generate PDF in background
-      setImmediate(async () => {
-        try {
-          const pdfPath = await generateIdentityReportPdf({
-            reference,
-            idType: "nin",
-            idNumber,
-            subjectName: existingLog.subjectName,
-            status,
-            verifiedBy: currentUserEmail,
-            checkedAt: newNinLog.createdAt,
-            requestData: { firstname, lastname, middlename, dob, phone, email, gender },
-            responseData: data as any,
-          });
-          await prisma.identityVerificationLog.update({
-            where: { id: newNinLog.id },
-            data: { pdfPath },
-          });
-        } catch (e) {
-          logger.error("Failed to generate cached NIN PDF report:", e);
-        }
-      });
-
-      await logToAuditTrail(submissionId, req.user, `NIN Verified (Cached) for ${existingLog.subjectName} [${reference}]`);
+    if (!forceNew && existingLog && existingLog.createdAt >= cutoffTime) {
+      await logToAuditTrail(submissionId, req.user, `NIN Verified (Cached) for ${existingLog.subjectName} [${existingLog.reference}]`, existingLog.reference);
 
       res.json({
         success: true,
-        data,
-        reference,
-        status,
-        id: newNinLog.id,
-        idType: newNinLog.idType,
-        idNumber: newNinLog.idNumber,
-        subjectName: newNinLog.subjectName,
-        verifiedBy: newNinLog.verifiedBy,
-        createdAt: newNinLog.createdAt.toISOString()
+        data: existingLog.responseData,
+        reference: existingLog.reference,
+        status: existingLog.status,
+        id: existingLog.id,
+        idType: existingLog.idType,
+        idNumber: existingLog.idNumber,
+        subjectName: existingLog.subjectName,
+        verifiedBy: existingLog.verifiedBy,
+        createdAt: existingLog.createdAt.toISOString()
       });
       return;
     } else {
@@ -490,29 +438,48 @@ router.post("/nin/:idNumber", async (req: AuthRequest, res: Response) => {
         data = { error: err.message };
       }
 
-      // 3. Generate reference and cache
-      reference = await generateReference("NIN");
-      const newNinLog = await prisma.identityVerificationLog.create({
-        data: {
-          reference,
-          idType: "nin",
-          idNumber,
-          subjectName: `${firstname} ${lastname}`,
-          status,
-          requestData: { firstname, lastname, middlename, dob, phone, email, gender },
-          responseData: data as any,
-          verifiedBy: currentUserEmail,
-        },
-      });
+      reference = existingLog ? existingLog.reference : await generateReference("NIN");
+      let subjectName = existingLog && !firstname ? existingLog.subjectName : `${firstname} ${lastname}`;
 
-      // 4. Generate PDF in background
+      if (existingLog) {
+        if (existingLog.pdfPath) {
+          try { fs.unlinkSync(existingLog.pdfPath); } catch {}
+        }
+        newNinLog = await prisma.identityVerificationLog.update({
+          where: { id: existingLog.id },
+          data: {
+            reference,
+            subjectName,
+            status,
+            requestData: { firstname, lastname, middlename, dob, phone, email, gender },
+            responseData: data as any,
+            verifiedBy: currentUserEmail,
+            pdfPath: null,
+            createdAt: new Date(),
+          },
+        });
+      } else {
+        newNinLog = await prisma.identityVerificationLog.create({
+          data: {
+            reference,
+            idType: "nin",
+            idNumber,
+            subjectName,
+            status,
+            requestData: { firstname, lastname, middlename, dob, phone, email, gender },
+            responseData: data as any,
+            verifiedBy: currentUserEmail,
+          },
+        });
+      }
+
       setImmediate(async () => {
         try {
           const pdfPath = await generateIdentityReportPdf({
             reference,
             idType: "nin",
             idNumber,
-            subjectName: `${firstname} ${lastname}`,
+            subjectName,
             status,
             verifiedBy: currentUserEmail,
             checkedAt: newNinLog.createdAt,
@@ -528,8 +495,7 @@ router.post("/nin/:idNumber", async (req: AuthRequest, res: Response) => {
         }
       });
 
-      // 4. Log to Audit Trail if tied to a submission
-      await logToAuditTrail(submissionId, req.user, `NIN Verified for ${firstname} ${lastname} [${reference}]`);
+      await logToAuditTrail(submissionId, req.user, `NIN Verified (Fresh/Upsert) for ${subjectName} [${reference}]`, reference);
 
       res.json({
         success: true,
