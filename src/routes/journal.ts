@@ -4,7 +4,8 @@ import multer from "multer";
 import * as xlsx from "xlsx";
 import prisma from "../lib/prisma";
 import { authenticate, AuthRequest } from "../middleware/authenticate";
-import { isSharePointEnabled, uploadToSharePoint, downloadFromSharePoint } from "../lib/sharepoint";
+import { isSharePointEnabled, downloadFromSharePoint } from "../lib/sharepoint";
+import { storeDocumentLocally } from "../lib/storage";
 
 const memUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -583,7 +584,7 @@ router.post("/upload", memUpload.single("file"), async (req: AuthRequest, res: R
 
     // Upload to SharePoint if enabled
     if (isSharePointEnabled()) {
-      sharepointPath = await uploadToSharePoint(
+      sharepointPath = await storeDocumentLocally(
         file.buffer,
         spFileName,
         file.mimetype || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

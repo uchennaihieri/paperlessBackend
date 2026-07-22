@@ -4,7 +4,8 @@ import path from "path";
 import prisma from "../lib/prisma";
 import { Prisma } from "@prisma/client";
 import { notifyActiveSignatories, notifySuccessfulCompletion, notifyTreaters } from "./workflow";
-import { isSharePointEnabled, uploadToSharePoint } from "../lib/sharepoint";
+import { isSharePointEnabled } from "../lib/sharepoint";
+import { storeDocumentLocally } from "../lib/storage";
 
 // Files are always buffered in memory; they go straight to SharePoint (or disk)
 // on submission — never stored in a temp location.
@@ -210,7 +211,7 @@ router.post("/submit/:slug", memUpload.any(), async (req: Request, res: Response
           ? `${process.env.SHAREPOINT_UPLOAD_FOLDER}/${formFolder}/${refFolder}`
           : `${formFolder}/${refFolder}`;
 
-        const storedPath = await uploadToSharePoint(
+        const storedPath = await storeDocumentLocally(
           file.buffer,
           file.originalname,
           file.mimetype || "application/octet-stream",
@@ -495,7 +496,7 @@ router.post("/submit-token/:token", memUpload.any(), async (req: Request, res: R
           ? `${process.env.SHAREPOINT_UPLOAD_FOLDER}/${formFolder}/${refFolder}`
           : `${formFolder}/${refFolder}`;
 
-        const storedPath = await uploadToSharePoint(
+        const storedPath = await storeDocumentLocally(
           file.buffer,
           file.originalname,
           file.mimetype || "application/octet-stream",
@@ -872,7 +873,7 @@ router.post("/submit-correction", memUpload.any(), async (req: Request, res: Res
             ? process.env.SHAREPOINT_UPLOAD_FOLDER + "/" + formFolder + "/" + refFolder
             : formFolder + "/" + refFolder;
 
-          const storedPath = await uploadToSharePoint(
+          const storedPath = await storeDocumentLocally(
             file.buffer,
             file.originalname,
             file.mimetype || "application/octet-stream",

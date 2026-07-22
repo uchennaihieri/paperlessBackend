@@ -1,5 +1,6 @@
 import { launchBrowser } from "./puppeteerBrowser";
-import { uploadToSharePoint, isSharePointEnabled } from "./sharepoint";
+import { isSharePointEnabled } from "./sharepoint";
+import { storeDocumentLocally } from "./storage";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -163,7 +164,7 @@ export async function generateIdentityReportPdf(opts: {
   const fileName = "report.pdf";
 
   if (isSharePointEnabled()) {
-    return uploadToSharePoint(pdfBuffer, fileName, "application/pdf", folder);
+    return storeDocumentLocally(pdfBuffer, fileName, "application/pdf", folder);
   }
 
   // Disk fallback

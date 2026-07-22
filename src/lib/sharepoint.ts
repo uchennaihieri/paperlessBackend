@@ -126,6 +126,9 @@ export async function uploadToSharePoint(
   return drivePath;
 }
 
+import fs from "fs";
+import path from "path";
+
 /**
  * Download a file from SharePoint by its stored drive path.
  *
@@ -135,6 +138,22 @@ export async function uploadToSharePoint(
 export async function downloadFromSharePoint(
   drivePath: string
 ): Promise<{ buffer: Buffer; mimeType: string }> {
+  // 1. Try local storage first (for new uploads < 14 days old)
+  const baseDir = process.env.LOCAL_UPLOAD_DIR || path.join(process.cwd(), "uploads");
+  const localPath = path.join(baseDir, drivePath);
+  
+  if (fs.existsSync(localPath)) {
+    const buffer = fs.readFileSync(localPath);
+    // Rough mime-type guess based on extension (since we don't store it here easily)
+    const ext = path.extname(drivePath).toLowerCase();
+    let mimeType = "application/octet-stream";
+    if (ext === ".pdf") mimeType = "application/pdf";
+    else if (ext === ".png") mimeType = "image/png";
+    else if (ext === ".jpg" || ext === ".jpeg") mimeType = "image/jpeg";
+    return { buffer, mimeType };
+  }
+
+  // 2. Fallback to SharePoint
   const token  = await getAccessToken();
   const siteId = await getSiteId();
 

@@ -5,7 +5,8 @@ import { findAndReport as crFindAndReport, type CRAccountSummary, type CRPerform
 import { logger } from "../lib/logger";
 import prisma from "../lib/prisma";
 import { launchBrowser } from "../lib/puppeteerBrowser";
-import { uploadToSharePoint, downloadFromSharePoint, isSharePointEnabled } from "../lib/sharepoint";
+import { downloadFromSharePoint, isSharePointEnabled } from "../lib/sharepoint";
+import { storeDocumentLocally } from "../lib/storage";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -195,7 +196,7 @@ async function generateCrbPdf(opts: {
   await browser.close();
 
   const folder = `checks/FCB/${reference}`;
-  if (isSharePointEnabled()) return uploadToSharePoint(pdfBuffer, "report.pdf", "application/pdf", folder);
+  if (isSharePointEnabled()) return storeDocumentLocally(pdfBuffer, "report.pdf", "application/pdf", folder);
   const dir = path.join(process.env.UPLOAD_DIR ?? "uploads", folder);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "report.pdf"), pdfBuffer);
@@ -343,7 +344,7 @@ async function generateCrPdf(opts: {
   await browser.close();
 
   const folder = `checks/CRR/${reference}`;
-  if (isSharePointEnabled()) return uploadToSharePoint(pdfBuffer, "report.pdf", "application/pdf", folder);
+  if (isSharePointEnabled()) return storeDocumentLocally(pdfBuffer, "report.pdf", "application/pdf", folder);
   const dir = path.join(process.env.UPLOAD_DIR ?? "uploads", folder);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "report.pdf"), pdfBuffer);
@@ -735,10 +736,6 @@ router.post("/consumer/report", async (req: AuthRequest, res: Response) => {
     res.status(502).json({ success: false, error: err.message ?? "Failed to fetch report from FirstCentral.", code: "INTERNALSERVERERROR" });
     return;
   }
-
-  // Debug: log the raw response structure so we can map it correctly
-  logger.info(`FirstCentral report keys for ${reference}: ${JSON.stringify(Object.keys(report ?? {}))}`);
-  logger.info(`FirstCentral report (truncated): ${JSON.stringify(report).slice(0, 500)}`);
 
   // Persist report data
   await prisma.creditBureauLog.update({

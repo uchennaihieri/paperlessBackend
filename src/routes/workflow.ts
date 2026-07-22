@@ -5,7 +5,8 @@ import { authenticate, AuthRequest } from "../middleware/authenticate";
 import { hashToken, decrypt } from "../lib/crypto";
 import { mailer } from "../lib/mailer";
 import { generateSubmissionPdf, generateContractPdf } from "../lib/pdfGenerator";
-import { isSharePointEnabled, uploadToSharePoint, downloadFromSharePoint } from "../lib/sharepoint";
+import { isSharePointEnabled, downloadFromSharePoint } from "../lib/sharepoint";
+import { storeDocumentLocally } from "../lib/storage";
 import fs from "fs/promises";
 import path from "path";
 import { PDFDocument, rgb } from "pdf-lib";
@@ -1133,7 +1134,7 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
 
         const pdfBytes = await pdfDoc.save();
         // Overwrite the file in SharePoint by passing doc.filePath as the fileName and "" as folder
-        await uploadToSharePoint(Buffer.from(pdfBytes), doc.filePath, doc.mimeType, "");
+        await storeDocumentLocally(Buffer.from(pdfBytes), doc.filePath, doc.mimeType, "");
         console.info(`[pdf] Burned annotations into Master PDF ${doc.filePath}`);
       }
     } catch (e) {
@@ -1435,11 +1436,12 @@ router.post("/:id/generate-pdf", async (req: AuthRequest, res: Response) => {
     const folder = process.env.SHAREPOINT_UPLOAD_FOLDER 
       ? `${process.env.SHAREPOINT_UPLOAD_FOLDER}/${formFolder}/${refFolder}`
       : `${formFolder}/${refFolder}`;
-    const storedPath: string = await uploadToSharePoint(
+    const storedPath: string = await storeDocumentLocally(
       pdfResult.buffer,
       pdfResult.filename,
       "application/pdf",
-      folder
+      folder,
+      true
     );
 
     if (storedPath) {

@@ -90,6 +90,30 @@ export async function runEventCronCheck() {
       logger.info(`🧹 Cleaned up ${deletedTempPdfs.count} old temporary PDFs.`);
     }
 
+    // ── Cleanup 14-day old Local Sync Files ──────────────────────────────────
+    const fourteenDaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+    const oldSyncedFiles = await prisma.sharepointSyncQueue.findMany({
+      where: {
+        status: "Completed",
+        updatedAt: { lt: fourteenDaysAgo }
+      }
+    });
+
+    if (oldSyncedFiles.length > 0) {
+      const fs = require("fs");
+      let deletedCount = 0;
+      for (const file of oldSyncedFiles) {
+        if (fs.existsSync(file.localPath)) {
+          fs.unlinkSync(file.localPath);
+          deletedCount++;
+        }
+      }
+      await prisma.sharepointSyncQueue.deleteMany({
+        where: { id: { in: oldSyncedFiles.map((f: any) => f.id) } }
+      });
+      logger.info(`🧹 Cleaned up ${deletedCount} 14-day old local SharePoint uploads.`);
+    }
+
   } catch (e) {
     logger.error("Event Cron Error: " + (e as Error).message);
   }

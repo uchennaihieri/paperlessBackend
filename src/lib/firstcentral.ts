@@ -106,7 +106,6 @@ export async function consumerMatchByBvn(
   }
 
   const rawText = await res.text();
-  logger.info(`FirstCentral ConsumerMatch RAW response: ${rawText}`);
   const raw: any = JSON.parse(rawText);
 
   // FirstCentral returns an array of section objects, merge them into one object
@@ -158,7 +157,6 @@ export async function getConsumerDetailedCreditReport(opts: {
   }
 
   const rawText = await res.text();
-  logger.info(`FirstCentral RAW response 1: ${rawText}`);
   const raw: any = JSON.parse(rawText);
   // FirstCentral returns an array of section objects, merge them into one object
   const payload = Array.isArray(raw) ? raw.reduce((acc, curr) => Object.assign(acc, curr), {}) : raw;
@@ -190,11 +188,9 @@ export async function getConsumerDetailedCreditReport(opts: {
     }
 
     const rawText2 = await res2.text();
-    logger.info(`FirstCentral RAW response 2: ${rawText2}`);
     const raw2: any = JSON.parse(rawText2);
     const payload2 = Array.isArray(raw2) ? raw2.reduce((acc, curr) => Object.assign(acc, curr), {}) : raw2;
-    logger.info(`FirstCentral report (resolved) keys: ${JSON.stringify(Object.keys(payload2 ?? {}))}`);
-    logger.info(`FirstCentral report (resolved) full: ${JSON.stringify(payload2)}`);
+    
     return payload2;
   }
 

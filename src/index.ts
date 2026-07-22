@@ -8,6 +8,7 @@ import morgan from "morgan";
 
 import { logger } from "./lib/logger";
 import { startPdfWorker } from "./lib/pdfWorker";
+import { startSharepointWorker } from "./lib/sharepointWorker";
 import { errorHandler } from "./middleware/errorHandler";
 import { notFound } from "./middleware/notFound";
 
@@ -144,6 +145,7 @@ import { startEventCron } from "./lib/eventCron";
 app.listen(Number(PORT), "0.0.0.0", () => {
   logger.info(`🚀 Paperless API listening on port ${PORT}`);
   startPdfWorker();
+  startSharepointWorker();
   startEventCron();
 });
 

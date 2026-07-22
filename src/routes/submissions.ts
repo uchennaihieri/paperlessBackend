@@ -6,7 +6,8 @@ import prisma from "../lib/prisma";
 import { Prisma } from "@prisma/client";
 import { authenticate, AuthRequest } from "../middleware/authenticate";
 import { hashToken, decrypt } from "../lib/crypto";
-import { isSharePointEnabled, uploadToSharePoint, downloadFromSharePoint } from "../lib/sharepoint";
+import { isSharePointEnabled, downloadFromSharePoint } from "../lib/sharepoint";
+import { storeDocumentLocally } from "../lib/storage";
 import { mailer } from "../lib/mailer";
 import { checkAndUnblockPrerequisites, notifyActiveSignatories, notifySuccessfulCompletion, notifySubmitterOfSubmission, notifyTreaters } from "./workflow";
 
@@ -614,7 +615,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
           ? `${process.env.SHAREPOINT_UPLOAD_FOLDER}/${formFolder}/${refFolder}`
           : `${formFolder}/${refFolder}`;
 
-        const storedPath = await uploadToSharePoint(
+        const storedPath = await storeDocumentLocally(
           buf, originalFilename, "application/pdf", folder
         );
 
@@ -751,7 +752,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
         processedContractFields.add(contractFieldLabel);
         const originalFilename = `Signed_${contractFieldLabel.replace(/[^a-zA-Z0-9]/g, "_")}.pdf`;
 
-        const storedPath = await uploadToSharePoint(
+        const storedPath = await storeDocumentLocally(
             finalBuffer, originalFilename, "application/pdf", folder
         );
 
@@ -836,7 +837,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
           ? `${process.env.SHAREPOINT_UPLOAD_FOLDER}/${formFolder}/${refFolder}`
           : `${formFolder}/${refFolder}`;
 
-        const storedPath = await uploadToSharePoint(
+        const storedPath = await storeDocumentLocally(
           file.buffer,
           file.originalname,
           file.mimetype || "application/octet-stream",
@@ -1728,7 +1729,7 @@ router.post("/:id/submit-correction", memUpload.any(), async (req: AuthRequest, 
             ? process.env.SHAREPOINT_UPLOAD_FOLDER + "/" + formFolder + "/" + refFolder
             : formFolder + "/" + refFolder;
 
-          const storedPath = await uploadToSharePoint(
+          const storedPath = await storeDocumentLocally(
             file.buffer,
             file.originalname,
             file.mimetype || "application/octet-stream",

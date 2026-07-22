@@ -1,7 +1,8 @@
 import { Router, Response, Request } from "express";
 import prisma from "../lib/prisma";
 import { authenticate, AuthRequest } from "../middleware/authenticate";
-import { isSharePointEnabled, uploadToSharePoint } from "../lib/sharepoint";
+import { isSharePointEnabled } from "../lib/sharepoint";
+import { storeDocumentLocally } from "../lib/storage";
 import { generateContractPdf, getContractPreviewHtml } from "../lib/pdfGenerator";
 import { checkAndUnblockPrerequisites } from "./workflow";
 import { mailer } from "../lib/mailer";
@@ -85,11 +86,13 @@ router.post("/external-sign/:token", async (req: Request, res: Response) => {
     if (isSharePointEnabled()) {
       const formFolder = contract.submission.formName.replace(/[\\/:*?"<>|]/g, "").trim().toUpperCase();
       const refFolder = contract.submission.reference?.replace(/[\\/:*?"<>|]/g, "").trim().toUpperCase() || contract.submissionId.slice(-6).toUpperCase();
-      storedPath = await uploadToSharePoint(
+      storedPath = await storeDocumentLocally(
         pdfResult.buffer,
         pdfResult.filename,
         "application/pdf",
-        `uploads/${formFolder}/${refFolder}/Contracts`
+        process.env.SHAREPOINT_UPLOAD_FOLDER
+          ? `${process.env.SHAREPOINT_UPLOAD_FOLDER}/${formFolder}/${refFolder}/Contracts`
+          : `${formFolder}/${refFolder}/Contracts`
       );
     }
 
@@ -305,11 +308,13 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
     if (isSharePointEnabled()) {
       const formFolder = contract.submission.formName.replace(/[\\/:*?"<>|]/g, "").trim().toUpperCase();
       const refFolder = contract.submission.reference?.replace(/[\\/:*?"<>|]/g, "").trim().toUpperCase() || contract.submissionId.slice(-6).toUpperCase();
-      storedPath = await uploadToSharePoint(
+      storedPath = await storeDocumentLocally(
         pdfResult.buffer,
         pdfResult.filename,
         "application/pdf",
-        `uploads/${formFolder}/${refFolder}/Contracts`
+        process.env.SHAREPOINT_UPLOAD_FOLDER
+          ? `${process.env.SHAREPOINT_UPLOAD_FOLDER}/${formFolder}/${refFolder}/Contracts`
+          : `${formFolder}/${refFolder}/Contracts`
       );
     }
 

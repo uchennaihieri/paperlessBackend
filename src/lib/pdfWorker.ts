@@ -1,6 +1,7 @@
 import prisma from "./prisma";
 import { generateSubmissionPdf, generateContractPdf } from "./pdfGenerator";
-import { isSharePointEnabled, uploadToSharePoint } from "./sharepoint";
+import { isSharePointEnabled } from "./sharepoint";
+import { storeDocumentLocally } from "./storage";
 import fs from "fs/promises";
 import path from "path";
 
@@ -88,11 +89,12 @@ async function processJob(job: {
     : `${formFolder}/${refFolder}`;
   const finalFolder = job.jobType === "Contract" ? `${folderPath}/Contracts` : folderPath;
 
-  const storedPath = await uploadToSharePoint(
+  const storedPath = await storeDocumentLocally(
     pdfResult.buffer,
     pdfResult.filename,
     "application/pdf",
-    finalFolder
+    finalFolder,
+    true
   );
 
   if (!storedPath) {

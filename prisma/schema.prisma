@@ -132,15 +132,17 @@ model FormAuditTrail {
 }
 
 model SubmissionDocument {
-  id           String         @id @default(cuid())
-  submissionId String
-  fieldName    String
-  originalName String
-  filePath     String
-  mimeType     String         @default("application/octet-stream")
-  size         Int            @default(0)
-  uploadedAt   DateTime       @default(now())
-  submission   FormSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  id             String         @id @default(cuid())
+  submissionId   String
+  fieldName      String
+  originalName   String
+  filePath       String
+  sharepointPath String?
+  syncedAt       DateTime?
+  mimeType       String         @default("application/octet-stream")
+  size           Int            @default(0)
+  uploadedAt     DateTime       @default(now())
+  submission     FormSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
 
   @@map("submission_documents")
 }
@@ -200,13 +202,15 @@ model SecurityData {
 }
 
 model UploadedFile {
-  id           String   @id @default(cuid())
-  fileName     String
-  originalName String
-  filePath     String
-  size         Int
-  mimeType     String
-  createdAt    DateTime @default(now())
+  id             String    @id @default(cuid())
+  fileName       String
+  originalName   String
+  filePath       String
+  sharepointPath String?
+  syncedAt       DateTime?
+  size           Int
+  mimeType       String
+  createdAt      DateTime  @default(now())
 }
 
 model Report {
@@ -543,4 +547,19 @@ model PdfTemp {
   id        String   @id @default(cuid())
   pdfBuffer Bytes
   createdAt DateTime @default(now())
+}
+
+model SharepointSyncQueue {
+  id           String   @id @default(cuid())
+  localPath    String   
+  targetFolder String   
+  mimeType     String
+  filename     String
+  status       String   @default("Pending")
+  attempts     Int      @default(0)
+  errorMsg     String?
+  documentId   String?  
+  fileId       String?  
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 }
