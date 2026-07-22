@@ -29,6 +29,7 @@ model User {
   specialAccess           String?              @db.VarChar(100)
   notificationPreferences Json?
   resetAttempts           Int                  @default(0)
+  profileImage            String?
   Event                   Event[]
   submissions             FormSubmission[]
   delegationsReceived     UserDelegation[]     @relation("Delegatee")

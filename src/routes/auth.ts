@@ -213,6 +213,85 @@ router.post("/forgot-password", async (req: Request, res: Response) => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// STEP 1.5 – POST /api/v1/auth/oauth-login
+// Handles Microsoft Entra ID (OAuth) login from the Next.js backend.
+// Enforces that employeeId matches the email returned by Microsoft.
+// ─────────────────────────────────────────────────────────────────────────────
+router.post("/oauth-login", async (req: Request, res: Response) => {
+  const { employeeId, email, secret, profileImage } = req.body;
+
+  if (secret !== process.env.JWT_SECRET) {
+    res.status(401).json({ success: false, error: "Unauthorized access.", code: "UNAUTHORIZED_OAUTH" });
+    return;
+  }
+
+  if (!employeeId || !email) {
+    res.status(400).json({ success: false, error: "Employee ID and Microsoft Email are required.", code: "MISSING_OAUTH_DATA" });
+    return;
+  }
+
+  // Find the user where BOTH employee_id and email match exactly
+  const allUserRows = await prisma.user.findMany({
+    where: { 
+      employee_id: { equals: employeeId.trim(), mode: "insensitive" },
+      finca_email: { equals: email.trim(), mode: "insensitive" },
+      status: { equals: "active", mode: "insensitive" }
+    }
+  });
+
+  if (!allUserRows || allUserRows.length === 0) {
+    res.status(401).json({ success: false, error: "Invalid credentials. Employee ID does not match the Microsoft email.", code: "OAUTH_MISMATCH" });
+    return;
+  }
+
+  const primaryUser = allUserRows[0];
+
+  // Persist Microsoft profile image to all role rows for this employee
+  if (profileImage) {
+    await prisma.user.updateMany({
+      where: { employee_id: { equals: employeeId.trim(), mode: "insensitive" } },
+      data: { profileImage } as any,
+    });
+  }
+
+  const roles = allUserRows.map(u => ({
+    id: u.id.toString(),
+    user_role: u.user_role,
+    branch: u.branch,
+    specialAccess: (u as any).specialAccess,
+    user_name: u.user_name,
+    finca_email: u.finca_email,
+    employee_id: u.employee_id,
+  }));
+
+  const tokenPayload = {
+    id: primaryUser.id,
+    email: primaryUser.finca_email,
+    user_name: primaryUser.user_name,
+    user_role: primaryUser.user_role,
+    branch: primaryUser.branch,
+    roles,
+    isLegacyAccount: primaryUser.passwordHash === null,
+    mustResetPassword: false,
+  };
+  
+  const token = jwt.sign(tokenPayload, process.env.JWT_SECRET as string, { expiresIn: "24h" });
+
+  res.json({
+    success: true,
+    token,
+    mustResetPassword: false,
+    isLegacyAccount: primaryUser.passwordHash === null,
+    profileImage: profileImage || (primaryUser as any).profileImage || null,
+    user: {
+      id: primaryUser.id,
+      name: primaryUser.user_name,
+      email: primaryUser.finca_email,
+      roles,
+    }
+  });
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STEP 2 – POST /api/v1/auth/verify-otp
@@ -347,6 +426,7 @@ router.post("/verify-otp", async (req: Request, res: Response) => {
     token,
     mustResetPassword: effectiveMustReset,
     isLegacyAccount: !defaultRole.passwordHash && !newPassword,
+    profileImage: (defaultRole as any).profileImage || null,
     user: {
       id: defaultRole.id,
       name: defaultRole.user_name,
