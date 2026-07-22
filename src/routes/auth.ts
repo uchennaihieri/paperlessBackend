@@ -221,12 +221,16 @@ router.post("/forgot-password", async (req: Request, res: Response) => {
 router.post("/oauth-login", async (req: Request, res: Response) => {
   const { employeeId, email, secret, profileImage } = req.body;
 
+  console.log(`[OAuth Login] Attempt for Employee ID: ${employeeId}, Email: ${email}`);
+
   if (secret !== process.env.JWT_SECRET) {
+    console.error(`[OAuth Login] Unauthorized - invalid secret. Expected ${process.env.JWT_SECRET}, got ${secret}`);
     res.status(401).json({ success: false, error: "Unauthorized access.", code: "UNAUTHORIZED_OAUTH" });
     return;
   }
 
   if (!employeeId || !email) {
+    console.error(`[OAuth Login] Missing credentials - Employee ID: ${employeeId}, Email: ${email}`);
     res.status(400).json({ success: false, error: "Employee ID and Microsoft Email are required.", code: "MISSING_OAUTH_DATA" });
     return;
   }
@@ -247,12 +251,19 @@ router.post("/oauth-login", async (req: Request, res: Response) => {
 
   const primaryUser = allUserRows[0];
 
+  console.log(`[OAuth Login] Found user: ${primaryUser.id} - ${primaryUser.user_name} (${primaryUser.employee_id})`);
+
   // Persist Microsoft profile image to all role rows for this employee
   if (profileImage) {
-    await prisma.user.updateMany({
-      where: { employee_id: { equals: employeeId.trim(), mode: "insensitive" } },
-      data: { profileImage } as any,
-    });
+    try {
+      await prisma.user.updateMany({
+        where: { employee_id: { equals: employeeId.trim(), mode: "insensitive" } },
+        data: { profileImage } as any,
+      });
+      console.log(`[OAuth Login] Saved profile image for employee ${employeeId}`);
+    } catch (e: any) {
+      console.error(`[OAuth Login] Failed to save profile image: ${e.message}`);
+    }
   }
 
   const roles = allUserRows.map(u => ({
