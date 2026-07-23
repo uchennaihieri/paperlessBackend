@@ -276,16 +276,16 @@ router.post("/oauth-login", async (req: Request, res: Response) => {
   console.log(`[OAuth Login] Found user: ${primaryUser.id} - ${primaryUser.user_name} (${primaryUser.employee_id})`);
 
   // Persist Microsoft profile image to all role rows for this employee
+  // Done asynchronously to prevent blocking the login response and causing timeouts
   if (profileImage) {
-    try {
-      await prisma.user.updateMany({
-        where: { employee_id: { equals: employeeId.trim(), mode: "insensitive" } },
-        data: { profileImage } as any,
-      });
+    prisma.user.updateMany({
+      where: { employee_id: { equals: employeeId.trim(), mode: "insensitive" } },
+      data: { profileImage } as any,
+    }).then(() => {
       console.log(`[OAuth Login] Saved profile image for employee ${employeeId}`);
-    } catch (e: any) {
+    }).catch((e: any) => {
       console.error(`[OAuth Login] Failed to save profile image: ${e.message}`);
-    }
+    });
   }
 
   const roles = allUserRows.map(u => ({
