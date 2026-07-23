@@ -213,6 +213,28 @@ router.post("/forgot-password", async (req: Request, res: Response) => {
   });
 });
 
+// ── GET /api/v1/auth/profile ────────────────────────────────────────────────
+// Returns extra profile data for the currently authenticated user
+router.get("/profile", authenticate as any, async (req: AuthRequest, res: Response) => {
+  const employeeId = req.user?.employee_id;
+  if (!employeeId) {
+    res.status(401).json({ success: false, error: "Unauthorized" });
+    return;
+  }
+
+  const user = await prisma.user.findFirst({
+    where: { employee_id: { equals: employeeId.trim(), mode: "insensitive" } },
+    select: { profileImage: true } // we can add more data here later
+  });
+
+  res.json({
+    success: true,
+    profile: {
+      profileImage: user?.profileImage || null
+    }
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // STEP 1.5 – POST /api/v1/auth/oauth-login
 // Handles Microsoft Entra ID (OAuth) login from the Next.js backend.
@@ -294,7 +316,7 @@ router.post("/oauth-login", async (req: Request, res: Response) => {
     token,
     mustResetPassword: false,
     isLegacyAccount: primaryUser.passwordHash === null,
-    profileImage: profileImage || (primaryUser as any).profileImage || null,
+    hasProfileImage: !!(profileImage || (primaryUser as any).profileImage),
     user: {
       id: primaryUser.id,
       name: primaryUser.user_name,
@@ -437,7 +459,7 @@ router.post("/verify-otp", async (req: Request, res: Response) => {
     token,
     mustResetPassword: effectiveMustReset,
     isLegacyAccount: !defaultRole.passwordHash && !newPassword,
-    profileImage: (defaultRole as any).profileImage || null,
+    hasProfileImage: !!(defaultRole as any).profileImage,
     user: {
       id: defaultRole.id,
       name: defaultRole.user_name,
