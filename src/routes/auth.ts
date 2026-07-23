@@ -241,7 +241,7 @@ router.get("/profile", authenticate as any, async (req: AuthRequest, res: Respon
 // Enforces that employeeId matches the email returned by Microsoft.
 // ─────────────────────────────────────────────────────────────────────────────
 router.post("/oauth-login", async (req: Request, res: Response) => {
-  const { employeeId, email, secret, profileImage } = req.body;
+  const { employeeId, email, secret, microsoftAccessToken } = req.body;
 
   console.log(`[OAuth Login] Attempt for Employee ID: ${employeeId}, Email: ${email}`);
 
@@ -275,17 +275,26 @@ router.post("/oauth-login", async (req: Request, res: Response) => {
 
   console.log(`[OAuth Login] Found user: ${primaryUser.id} - ${primaryUser.user_name} (${primaryUser.employee_id})`);
 
-  // Persist Microsoft profile image to all role rows for this employee
-  // Done asynchronously to prevent blocking the login response and causing timeouts
-  if (profileImage) {
-    prisma.user.updateMany({
-      where: { employee_id: { equals: employeeId.trim(), mode: "insensitive" } },
-      data: { profileImage } as any,
-    }).then(() => {
-      console.log(`[OAuth Login] Saved profile image for employee ${employeeId}`);
-    }).catch((e: any) => {
-      console.error(`[OAuth Login] Failed to save profile image: ${e.message}`);
-    });
+  // Asynchronously fetch and save Microsoft profile image so we don't block the login
+  if (microsoftAccessToken && !primaryUser.profileImage) {
+    fetch("https://graph.microsoft.com/v1.0/me/photo/$value", {
+      headers: { Authorization: `Bearer ${microsoftAccessToken}` },
+    })
+      .then(async (photoRes) => {
+        if (photoRes.ok) {
+          const buffer = Buffer.from(await photoRes.arrayBuffer());
+          const contentType = photoRes.headers.get("content-type") || "image/jpeg";
+          const profileImageBase64 = `data:${contentType};base64,${buffer.toString("base64")}`;
+          await prisma.user.updateMany({
+            where: { employee_id: { equals: employeeId.trim(), mode: "insensitive" } },
+            data: { profileImage: profileImageBase64 } as any,
+          });
+          console.log(`[OAuth Login] Async fetched and saved profile image for ${employeeId}`);
+        }
+      })
+      .catch((e: any) => {
+        console.error(`[OAuth Login] Background photo fetch failed: ${e.message}`);
+      });
   }
 
   const roles = allUserRows.map(u => ({
@@ -316,7 +325,7 @@ router.post("/oauth-login", async (req: Request, res: Response) => {
     token,
     mustResetPassword: false,
     isLegacyAccount: primaryUser.passwordHash === null,
-    hasProfileImage: !!(profileImage || (primaryUser as any).profileImage),
+    hasProfileImage: !!primaryUser.profileImage || !!microsoftAccessToken,
     user: {
       id: primaryUser.id,
       name: primaryUser.user_name,
