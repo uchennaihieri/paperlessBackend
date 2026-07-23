@@ -216,14 +216,14 @@ router.post("/forgot-password", async (req: Request, res: Response) => {
 // ── GET /api/v1/auth/profile ────────────────────────────────────────────────
 // Returns extra profile data for the currently authenticated user
 router.get("/profile", authenticate as any, async (req: AuthRequest, res: Response) => {
-  const employeeId = req.user?.employee_id;
-  if (!employeeId) {
+  const userId = req.user?.id;
+  if (!userId) {
     res.status(401).json({ success: false, error: "Unauthorized" });
     return;
   }
 
-  const user = await prisma.user.findFirst({
-    where: { employee_id: { equals: employeeId.trim(), mode: "insensitive" } },
+  const user = await prisma.user.findUnique({
+    where: { id: Number(userId) },
     select: { profileImage: true } // we can add more data here later
   });
 
