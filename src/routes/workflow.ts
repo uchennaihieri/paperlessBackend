@@ -660,7 +660,8 @@ router.post("/:id/complete", async (req: AuthRequest, res: Response) => {
         approvedBy: "None", 
         approverEmail: null,
         treatedBy: treaterName,
-        treaterEmail: email
+        treaterEmail: email,
+        treaterBranch: req.user?.branch,
       },
     });
     await logAudit({
@@ -755,6 +756,7 @@ router.post("/:id/approve", async (req: AuthRequest, res: Response) => {
       status: "Completed",
       approvedBy: approverName,
       approverEmail: email,
+      treaterBranch: req.user?.branch,
     },
   });
 

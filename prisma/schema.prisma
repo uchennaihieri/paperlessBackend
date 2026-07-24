@@ -35,6 +35,8 @@ model User {
   delegationsReceived     UserDelegation[]     @relation("Delegatee")
   delegationsGiven        UserDelegation[]     @relation("Delegator")
   devices                 DeviceRegistration[]
+  createdFolders          FileFolder[]
+  folderAccess            FileFolderAccess[]
 
   @@map("users")
 }
@@ -105,6 +107,7 @@ model FormSubmission {
   requestBatchId       String?
   delegatedTo          String?
   correctionRequests   Json?
+  treaterBranch        String?                  @db.VarChar(100)
   eventAsMaster        Event?                   @relation("MasterSubmission")
   submittedBy          User?                    @relation(fields: [submittedById], references: [id])
   template             FormTemplate             @relation(fields: [templateId], references: [id], onDelete: Cascade)
@@ -114,6 +117,47 @@ model FormSubmission {
   contractRequests     ContractRequest[]
   auditTrail           FormAuditTrail[]
   documents            SubmissionDocument[]
+  manualFolders        FileFolderSubmission[]
+}
+
+model FileFolder {
+  id          String                 @id @default(cuid())
+  name        String
+  createdById Int
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
+
+  createdBy   User                   @relation(fields: [createdById], references: [id])
+  access      FileFolderAccess[]
+  submissions FileFolderSubmission[]
+
+  @@map("file_folders")
+}
+
+model FileFolderAccess {
+  id          String     @id @default(cuid())
+  folderId    String
+  userId      Int
+  accessLevel String     // "VIEW" or "WRITE"
+  createdAt   DateTime   @default(now())
+
+  folder      FileFolder @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([folderId, userId])
+  @@map("file_folder_access")
+}
+
+model FileFolderSubmission {
+  folderId     String
+  submissionId String
+  createdAt    DateTime @default(now())
+
+  folder       FileFolder     @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  submission   FormSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  @@id([folderId, submissionId])
+  @@map("file_folder_submissions")
 }
 
 model FormAuditTrail {

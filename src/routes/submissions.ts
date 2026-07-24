@@ -66,6 +66,7 @@ router.get("/my", async (req: AuthRequest, res: Response) => {
 // Items in the Action Center for the user's branch (as formTreater)
 router.get("/action-items", async (req: AuthRequest, res: Response) => {
   const userBranch = req.user?.branch ?? null;
+  const requestedStatus = req.query.status as string || "Pending";
   if (!userBranch) { res.json({ success: true, data: [] }); return; }
 
   // ── Lazy revert: if a form has been "Assigned" for over 1 hour without being
@@ -153,15 +154,37 @@ router.get("/action-items", async (req: AuthRequest, res: Response) => {
     }
   }
 
+  let statusCondition: any = {};
+
+  if (requestedStatus === "Completed") {
+    statusCondition = { status: "Completed" };
+  } else if (requestedStatus === "Processing") {
+    statusCondition = { status: "Processing" };
+  } else if (requestedStatus === "Awaiting Correction") {
+    statusCondition = { status: "Awaiting Correction" };
+  } else if (requestedStatus === "Assigned") {
+    statusCondition = { status: { startsWith: "Assigned" }, treaterEmail: { equals: req.user?.email, mode: "insensitive" } };
+  } else if (requestedStatus === "All") {
+    statusCondition = {
+      OR: [
+        { status: { in: ["Processing", "Filed", "Awaiting Correction"] } },
+        { status: { startsWith: "Assigned" } },
+      ],
+    };
+  } else {
+    // Default "Pending"
+    statusCondition = {
+      OR: [
+        { status: { in: ["Processing", "Filed"] } },
+        { status: { startsWith: "Assigned" } },
+      ],
+    };
+  }
+
   const items = await prisma.formSubmission.findMany({
     where: {
       AND: [
-        {
-          OR: [
-            { status: { in: ["Processing", "Filed"] } },
-            { status: { startsWith: "Assigned" } },
-          ],
-        },
+        statusCondition,
         {
           OR: [
             { delegatedTo: { equals: req.user?.email || "", mode: "insensitive" } },
@@ -180,6 +203,18 @@ router.get("/action-items", async (req: AuthRequest, res: Response) => {
       signatories: { orderBy: { position: "asc" } },
       submittedBy: { select: { user_name: true, finca_email: true, branch: true } },
       documents: true,
+      manualFolders: {
+        where: {
+          folder: {
+            access: {
+              some: { userId: req.user?.id }
+            }
+          }
+        },
+        include: {
+          folder: true
+        }
+      },
     },
     orderBy: { createdAt: "desc" },
   });
@@ -215,6 +250,7 @@ router.get("/filings", async (req: AuthRequest, res: Response) => {
         status: "Completed",
         OR: [
           { template: { formOwner: { equals: userBranch, mode: "insensitive" } } },
+          { treaterBranch: { equals: userBranch, mode: "insensitive" } },
           {
             AND: [
               {
@@ -248,6 +284,18 @@ router.get("/filings", async (req: AuthRequest, res: Response) => {
         publicSubmitterName: true,
         publicSubmitterEmail: true,
         submittedBy: { select: { user_name: true, finca_email: true, branch: true } },
+        manualFolders: {
+          where: {
+            folder: {
+              access: {
+                some: { userId: req.user?.id }
+              }
+            }
+          },
+          include: {
+            folder: true
+          }
+        },
       }
     });
 

@@ -50,6 +50,7 @@ import { eventsRouter } from "./routes/events";
 import delegationsRouter from "./routes/delegations";
 import datasetsRouter from "./routes/datasets";
 import crmRouter from "./routes/crm";
+import foldersRouter from "./routes/folders";
 
 const app = express();
 const PORT = process.env.PORT ?? 4000;
@@ -98,6 +99,7 @@ v1.use("/lists", listsRouter);
 v1.use("/submissions", submissionsRouter);
 v1.use("/workflow", workflowRouter);
 v1.use("/security", securityRouter);
+v1.use("/folders", foldersRouter);
 v1.use("/teams", teamsRouter);
 v1.use("/upload", uploadRouter);
 v1.use("/crm", crmRouter);
