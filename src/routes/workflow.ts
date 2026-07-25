@@ -1507,7 +1507,7 @@ router.get("/:id/preview-pdf", async (req: AuthRequest, res: Response) => {
 
 // ── Helper notification functions ───────────────────────────────────────────
 
-export async function notifyActiveSignatories(submissionId: string) {
+export async function notifyActiveSignatories(submissionId: string, excludeEmail?: string) {
   try {
     const submission = await prisma.formSubmission.findUnique({
       where: { id: submissionId },
@@ -1539,6 +1539,8 @@ export async function notifyActiveSignatories(submissionId: string) {
     }
 
     for (const signatory of activeSignatories) {
+      if (excludeEmail && signatory.email === excludeEmail) continue;
+
       await mailer.sendMail({
         from: `FINCALite <${process.env.SMTP_FROM ?? process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
         to: signatory.email,
@@ -1568,6 +1570,55 @@ export async function notifyActiveSignatories(submissionId: string) {
     }
   } catch (err) {
     console.error("[notifyActiveSignatories] error:", err);
+  }
+}
+
+export async function notifyOfficerOfPersonalLink(submissionId: string, officerEmail: string, needsToSign: boolean) {
+  try {
+    const submission = await prisma.formSubmission.findUnique({
+      where: { id: submissionId },
+      select: { id: true, formName: true, reference: true }
+    });
+    if (!submission) return;
+
+    const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
+    const message = needsToSign 
+      ? "Your personal link has been filled. You need to sign." 
+      : "Your personal link has been filled and routed directly to the treater.";
+    
+    const actionUrl = needsToSign
+      ? `${appUrl}/dashboard/forms/${submission.id}`
+      : `${appUrl}/track/${submission.id}`;
+      
+    const buttonText = needsToSign ? "View Submission" : "Track Submission Status";
+
+    console.info(`[notifyOfficerOfPersonalLink] Sending personal link notification to ${officerEmail}`);
+
+    await mailer.sendMail({
+      from: `FINCALite <${process.env.SMTP_FROM ?? process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
+      to: officerEmail,
+      subject: `Your Personal Link Has Been Filled: ${submission.formName}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
+          <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
+          <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
+          <hr style="border-color: #e5e7eb; margin: 20px 0;" />
+          <p style="font-size: 15px; color: #111827;">Hello,</p>
+          <p style="font-size: 14px; color: #374151;">
+            ${message}
+          </p>
+          <div style="background: #f9fafb; border-left: 4px solid #B50938; border-radius: 4px; padding: 16px; margin: 16px 0;">
+            <p style="margin: 0; font-weight: 600; color: #111827;">${submission.formName}</p>
+            <p style="margin: 4px 0 0; font-size: 13px; color: #6b7280;">Reference: ${submission.reference ?? "N/A"}</p>
+          </div>
+          <a href="${actionUrl}" style="display: inline-block; background: #B50938; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; margin-top: 8px;">${buttonText}</a>
+        </div>
+      `,
+    }).then(() => {
+      console.info(`[notifyOfficerOfPersonalLink] Personal link notification successfully sent to ${officerEmail}`);
+    }).catch((e: any) => console.error("[notifyOfficerOfPersonalLink email error]", e));
+  } catch (err) {
+    console.error("[notifyOfficerOfPersonalLink] error:", err);
   }
 }
 
@@ -1628,17 +1679,19 @@ export async function notifySuccessfulCompletion(submissionId: string) {
     });
 
     const submittedBy = submission?.submittedBy;
-    if (!submission || !submittedBy?.finca_email) return;
+    if (!submission || (!submittedBy?.finca_email && !submission?.publicSubmitterEmail)) return;
 
-    const emailTo = submittedBy.finca_email;
-    const userName = submittedBy.user_name ?? "there";
+    const emailTo = submittedBy?.finca_email || submission?.publicSubmitterEmail;
+    const userName = submittedBy?.user_name || submission?.publicSubmitterName || "there";
     const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
+    const buttonLink = submittedBy?.finca_email ? `${appUrl}/dashboard/forms/submission/${submission.id}` : `${appUrl}/track/${submission.id}`;
+    const buttonText = submittedBy?.finca_email ? "View Submission" : "Track Submission Status";
 
     console.info(`[notifySuccessfulCompletion] Sending successful completion email for submission ${submissionId} to submitter ${emailTo}`);
 
     await mailer.sendMail({
       from: `FINCALite <${process.env.SMTP_FROM ?? process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
-      to: emailTo,
+      to: emailTo as string,
       subject: `Submission Approved: "${submission.formName}"`,
       html: `
           <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
@@ -1654,7 +1707,7 @@ export async function notifySuccessfulCompletion(submissionId: string) {
               <p style="margin: 4px 0 0; font-size: 13px; color: #047857;">Reference: ${submission.reference ?? "N/A"}</p>
               <p style="margin: 8px 0 0; font-size: 14px; color: #065f46;"><strong>Status:</strong> Approved & Completed</p>
             </div>
-            <a href="${appUrl}/dashboard/forms/submission/${submission.id}" style="display: inline-block; background: #10b981; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; margin-top: 8px;">View Submission</a>
+            <a href="${buttonLink}" style="display: inline-block; background: #10b981; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; margin-top: 8px;">${buttonText}</a>
             <p style="font-size: 12px; color: #9ca3af; margin-top: 24px;">If you believe this was sent in error, please contact your administrator.</p>
           </div>
       `,
@@ -1676,17 +1729,19 @@ export async function notifySubmitterOfSubmission(submissionId: string) {
     });
 
     const submittedBy = submission?.submittedBy;
-    if (!submission || !submittedBy?.finca_email) return;
+    if (!submission || (!submittedBy?.finca_email && !submission?.publicSubmitterEmail)) return;
 
-    const emailTo = submittedBy.finca_email;
-    const userName = submittedBy.user_name ?? "there";
+    const emailTo = submittedBy?.finca_email || submission?.publicSubmitterEmail;
+    const userName = submittedBy?.user_name || submission?.publicSubmitterName || "there";
     const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
+    const buttonLink = submittedBy?.finca_email ? `${appUrl}/dashboard/forms/submission/${submission.id}` : `${appUrl}/track/${submission.id}`;
+    const buttonText = submittedBy?.finca_email ? "View Submission" : "Track Submission Status";
 
     console.info(`[notifySubmitterOfSubmission] Sending submission confirmation email for submission ${submissionId} to submitter ${emailTo}`);
 
     await mailer.sendMail({
       from: `FINCALite <${process.env.SMTP_FROM ?? process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
-      to: emailTo,
+      to: emailTo as string,
       subject: `Submission Confirmation: "${submission.formName}"`,
       html: `
           <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
@@ -1701,7 +1756,7 @@ export async function notifySubmitterOfSubmission(submissionId: string) {
               <p style="margin: 0; font-weight: 600; color: #111827;">${submission.formName}</p>
               <p style="margin: 4px 0 0; font-size: 13px; color: #6b7280;">Reference: ${submission.reference ?? "N/A"}</p>
             </div>
-            <a href="${appUrl}/dashboard/forms/submission/${submission.id}" style="display: inline-block; background: #B50938; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; margin-top: 8px;">View Submission</a>
+            <a href="${buttonLink}" style="display: inline-block; background: #B50938; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; margin-top: 8px;">${buttonText}</a>
             <p style="font-size: 12px; color: #9ca3af; margin-top: 24px;">If you believe this was sent in error, please contact your administrator.</p>
           </div>
       `,

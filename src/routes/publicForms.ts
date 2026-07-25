@@ -3,7 +3,7 @@ import multer from "multer";
 import path from "path";
 import prisma from "../lib/prisma";
 import { Prisma } from "@prisma/client";
-import { notifyActiveSignatories, notifySuccessfulCompletion, notifyTreaters } from "./workflow";
+import { notifyActiveSignatories, notifySuccessfulCompletion, notifyTreaters, notifySubmitterOfSubmission, notifyOfficerOfPersonalLink } from "./workflow";
 import { isSharePointEnabled } from "../lib/sharepoint";
 import { storeDocumentLocally } from "../lib/storage";
 
@@ -21,16 +21,35 @@ function sanitiseFolder(s: string): string {
 
 const router = Router();
 
-async function buildPublicSignatories(template: any, publicSubmitterName: string, publicSubmitterEmail: string, submitterSignature: string | undefined) {
-  let initialStatus = "Submitted";
-  const signatoriesData: any[] = [{
+async function buildPublicSignatories(template: any, submitterName: string, submitterEmail: string, submitterSignature: string | undefined, officerId?: number, noSign: boolean = false) {
+  let signatoriesData: any[] = [{
     position: 1,
-    userName: publicSubmitterName,
-    email: publicSubmitterEmail,
+    userName: submitterName,
+    email: submitterEmail,
     status: "Signed",
     signatureData: submitterSignature || null,
     signedAt: new Date()
   }];
+
+  let currentPosition = 2;
+  let initiatorBranch = "HQ";
+
+  if (officerId) {
+    const officer = await prisma.user.findUnique({ where: { id: officerId } });
+    if (officer) {
+      initiatorBranch = officer.branch || "HQ";
+      if (!noSign) {
+        signatoriesData.push({
+          position: currentPosition++,
+          userName: officer.user_name || "Unknown",
+          email: officer.finca_email || "unknown@internal",
+          status: "Pending"
+        });
+      }
+    }
+  }
+
+  let initialStatus = "Submitted";
 
   if (template.automatedSignatories) {
     const autoSigs = typeof template.automatedSignatories === "string" 
@@ -38,12 +57,20 @@ async function buildPublicSignatories(template: any, publicSubmitterName: string
       : template.automatedSignatories;
     
     if (Array.isArray(autoSigs) && autoSigs.length > 0) {
-      let currentPosition = 2;
       for (const sig of autoSigs) {
         let targetBranch = sig.branch;
-        if (targetBranch === "USER BRANCH") {
-           targetBranch = "HQ"; // Fallback
-        }
+        
+        if (targetBranch === "MY_BRANCH") {
+           // Fallback logic for Head Office (or non-branch)
+           if (initiatorBranch === "Head Office" || initiatorBranch === "HQ") {
+             targetBranch = sig.fallbackBranch || "HQ";
+           } else {
+             targetBranch = initiatorBranch;
+           }
+        } else if (targetBranch === "USER BRANCH") {
+           targetBranch = initiatorBranch;
+        } 
+        
         const user = await prisma.user.findFirst({
           where: {
             status: { equals: "active", mode: "insensitive" },
@@ -66,23 +93,39 @@ async function buildPublicSignatories(template: any, publicSubmitterName: string
       initialStatus = signatoriesData.length > 1 ? "In-review" : "Submitted";
     } else {
       const hasTreater = !!(template?.formTreater && template.formTreater.toLowerCase() !== "none");
-      initialStatus = hasTreater ? "Processing" : "Completed";
+      initialStatus = signatoriesData.length > 1 ? "In-review" : (hasTreater ? "Processing" : "Completed");
     }
   } else {
     const hasTreater = !!(template?.formTreater && template.formTreater.toLowerCase() !== "none");
-    initialStatus = hasTreater ? "Processing" : "Completed";
+    initialStatus = signatoriesData.length > 1 ? "In-review" : (hasTreater ? "Processing" : "Completed");
   }
 
   return { signatoriesData, initialStatus };
+}
+
+async function resolveTemplateAndOfficer(slug: string) {
+  let template = await prisma.formTemplate.findUnique({ where: { publicSlug: slug } });
+  let officerId: number | undefined = undefined;
+  
+  if (!template) {
+    const match = slug.match(/^(.+?)(\d+)$/);
+    if (match) {
+      const baseSlug = match[1];
+      const parsedOfficerId = parseInt(match[2], 10);
+      template = await prisma.formTemplate.findUnique({ where: { publicSlug: baseSlug } });
+      if (template) {
+        officerId = parsedOfficerId;
+      }
+    }
+  }
+  return { template, officerId };
 }
 
 // GET /api/v1/public-forms/slug/:slug
 // Fetches the template details for an anonymous user
 router.get("/slug/:slug", async (req: Request, res: Response) => {
   const { slug } = req.params;
-  const template = await prisma.formTemplate.findUnique({
-    where: { publicSlug: slug },
-  });
+  const { template } = await resolveTemplateAndOfficer(slug);
 
   if (!template || !template.isPublic) {
     res.status(404).json({ success: false, error: "Form not found or not public", code: "FORM_NOT_FOUND" });
@@ -109,6 +152,7 @@ router.get("/slug/:slug", async (req: Request, res: Response) => {
 // Accepts a submission from an anonymous user
 router.post("/submit/:slug", memUpload.any(), async (req: Request, res: Response) => {
   const { slug } = req.params;
+  const noSign = req.query.nosign === "1";
   
   let payload: any = {};
   try {
@@ -129,9 +173,10 @@ router.post("/submit/:slug", memUpload.any(), async (req: Request, res: Response
     return;
   }
 
-  const template = await prisma.formTemplate.findUnique({
-    where: { publicSlug: slug },
-  });
+  const { template, officerId } = await resolveTemplateAndOfficer(slug);
+  
+  // Attach officerId to req so subsequent logic can use it
+  (req as any).resolvedOfficerId = officerId;
 
   if (!template || !template.isPublic) {
     res.status(404).json({ success: false, error: "Form not found or not public", code: "FORM_NOT_FOUND" });
@@ -171,6 +216,13 @@ router.post("/submit/:slug", memUpload.any(), async (req: Request, res: Response
   }
 
   const updatedResponses: Record<string, any> = { ...formResponses };
+
+  if (officerId) {
+    const officer = await prisma.user.findUnique({ where: { id: officerId } });
+    if (officer) {
+      updatedResponses["Officer"] = officer.user_name || officer.finca_email || "Unknown";
+    }
+  }
 
   // Resolve event_selector
   try {
@@ -233,7 +285,7 @@ router.post("/submit/:slug", memUpload.any(), async (req: Request, res: Response
   }
 
   try {
-    const { signatoriesData, initialStatus } = await buildPublicSignatories(template, publicSubmitterName, publicSubmitterEmail, submitterSignature);
+    const { signatoriesData, initialStatus } = await buildPublicSignatories(template, publicSubmitterName, publicSubmitterEmail, submitterSignature, (req as any).resolvedOfficerId, noSign);
 
     const submission = await prisma.formSubmission.create({
       data: {
@@ -275,8 +327,21 @@ router.post("/submit/:slug", memUpload.any(), async (req: Request, res: Response
       });
     }
 
+    // Notify the public submitter that their submission was received
+    notifySubmitterOfSubmission(submission.id).catch(console.error);
+    
+    // Custom notification if this was a personal link
+    let officerEmailToExclude: string | undefined = undefined;
+    if (officerId) {
+      const officer = await prisma.user.findUnique({ where: { id: officerId } });
+      if (officer && officer.finca_email) {
+        officerEmailToExclude = officer.finca_email;
+        notifyOfficerOfPersonalLink(submission.id, officer.finca_email, !noSign).catch(console.error);
+      }
+    }
+
     if (initialStatus === "In-review") {
-      notifyActiveSignatories(submission.id).catch(console.error);
+      notifyActiveSignatories(submission.id, officerEmailToExclude).catch(console.error);
     } else if (initialStatus === "Completed" || initialStatus === "Processing") {
       if (initialStatus === "Completed") {
         notifySuccessfulCompletion(submission.id).catch(console.error);
@@ -930,6 +995,51 @@ router.post("/submit-correction", memUpload.any(), async (req: Request, res: Res
     res.json({ success: true, data: updated });
   } catch (err: any) {
     res.status(500).json({ success: false, error: "Failed to submit correction." });
+  }
+});
+
+// ── GET PUBLIC TRACKING DATA ──
+router.get("/track/:id", async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const submission = await prisma.formSubmission.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        reference: true,
+        formName: true,
+        status: true,
+        createdAt: true,
+        publicSubmitterName: true,
+        publicSubmitterEmail: true,
+        template: {
+          select: {
+            name: true,
+            formTreater: true,
+          }
+        }
+      }
+    });
+
+    if (!submission) {
+      return res.status(404).json({ success: false, error: "Submission not found" });
+    }
+
+    const signatories = await prisma.submissionSignatory.findMany({
+      where: { submissionId: id },
+      orderBy: { position: "asc" },
+      select: {
+        userName: true,
+        status: true,
+        position: true,
+        signedAt: true,
+      }
+    });
+
+    res.json({ success: true, data: { submission, signatories } });
+  } catch (error: any) {
+    console.error("[public tracking error]", error);
+    res.status(500).json({ success: false, error: "Failed to fetch tracking data." });
   }
 });
 

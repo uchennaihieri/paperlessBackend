@@ -74,6 +74,7 @@ model FormTemplate {
   isActive               Boolean                  @default(true)
   generatesExcel         Boolean                  @default(false)
   formTreaterRole        String?
+  formTreaterFallbackBranch String?
   automatedSignatories   Json?
   automatedSigningType   String?
   isPublic               Boolean                  @default(false)
