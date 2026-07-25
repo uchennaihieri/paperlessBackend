@@ -2,6 +2,7 @@ import { Router, Response } from "express";
 import prisma from "../lib/prisma";
 import { authenticate, AuthRequest } from "../middleware/authenticate";
 import { mailer } from "../lib/mailer";
+import { notifier } from "../lib/notifier";
 
 const router = Router();
 router.use(authenticate as any);
@@ -84,6 +85,13 @@ router.post("/:id/remind", async (req: AuthRequest, res: Response) => {
 
     const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
     const fillUrl = `${appUrl}/dashboard/forms/draft/${prereq.prereqSubmission.id}`;
+
+    notifier.notifyInternalUser({
+      to: targetEmail,
+      subject: `Reminder: Please complete the "${targetFormName}" form`,
+      message: `This is a reminder that you have been requested to complete a prerequisite form (${targetFormName}) before a submission can proceed. Reference: ${prereq.prereqSubmission.reference}`,
+      link: fillUrl,
+    });
 
     await mailer.sendMail({
       from: `FINCALite <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
@@ -183,6 +191,13 @@ router.post("/:id/decline", async (req: AuthRequest, res: Response) => {
           const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
           const subUrl = `${appUrl}/dashboard/forms/submission/${prereq.mainSubmission.id}`;
           
+          notifier.notifyInternalUser({
+            to: submitter.finca_email,
+            subject: `Submission Rejected: ${prereq.mainSubmission.formName}`,
+            message: `Your submission (${prereq.mainSubmission.reference || prereq.mainSubmission.formName}) was rejected because a required prerequisite form was declined.`,
+            link: subUrl,
+          });
+
           await mailer.sendMail({
             from: `FINCALite <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
             to: submitter.finca_email,

@@ -4,6 +4,7 @@ import prisma from "../lib/prisma";
 import { authenticate, AuthRequest } from "../middleware/authenticate";
 import { hashToken, decrypt } from "../lib/crypto";
 import { mailer } from "../lib/mailer";
+import { notifier } from "../lib/notifier";
 import { generateSubmissionPdf, generateContractPdf } from "../lib/pdfGenerator";
 import { isSharePointEnabled, downloadFromSharePoint } from "../lib/sharepoint";
 import { storeDocumentLocally } from "../lib/storage";
@@ -1541,6 +1542,13 @@ export async function notifyActiveSignatories(submissionId: string, excludeEmail
     for (const signatory of activeSignatories) {
       if (excludeEmail && signatory.email === excludeEmail) continue;
 
+      notifier.notifyInternalUser({
+        to: signatory.email,
+        subject: `Action Required: "${submission.formName}" is ready for your signature`,
+        message: `A form requires your signature (${submission.formName}). Submitted by: ${submitterName}. Reference: ${submission.reference ?? "N/A"}.`,
+        link: `${appUrl}/dashboard/workflow`,
+      });
+
       await mailer.sendMail({
         from: `FINCALite <${process.env.SMTP_FROM ?? process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
         to: signatory.email,
@@ -1594,6 +1602,13 @@ export async function notifyOfficerOfPersonalLink(submissionId: string, officerE
 
     console.info(`[notifyOfficerOfPersonalLink] Sending personal link notification to ${officerEmail}`);
 
+    notifier.notifyInternalUser({
+      to: officerEmail,
+      subject: `Your Personal Link Has Been Filled: ${submission.formName}`,
+      message: `${message} Reference: ${submission.reference ?? "N/A"}`,
+      link: actionUrl,
+    });
+
     await mailer.sendMail({
       from: `FINCALite <${process.env.SMTP_FROM ?? process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
       to: officerEmail,
@@ -1636,6 +1651,13 @@ export async function notifyFinalApprover(submissionId: string) {
     const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
 
     console.info(`[notifyFinalApprover] Sending final approval request email for submission ${submissionId} to ${submission.approverEmail}`);
+
+    notifier.notifyInternalUser({
+      to: submission.approverEmail,
+      subject: `Action Required: Final Approval needed for "${submission.formName}"`,
+      message: `A submission (${submission.formName}) is pending your final approval. Submitted by: ${submitterName}. Reference: ${submission.reference ?? "N/A"}.`,
+      link: `${appUrl}/dashboard/workflow`,
+    });
 
     await mailer.sendMail({
       from: `FINCALite <${process.env.SMTP_FROM ?? process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
@@ -1689,6 +1711,15 @@ export async function notifySuccessfulCompletion(submissionId: string) {
 
     console.info(`[notifySuccessfulCompletion] Sending successful completion email for submission ${submissionId} to submitter ${emailTo}`);
 
+    if (submittedBy?.finca_email) {
+      notifier.notifyInternalUser({
+        to: emailTo as string,
+        subject: `Submission Approved: "${submission.formName}"`,
+        message: `Your submission (${submission.formName}) has been successfully approved and completed! Reference: ${submission.reference ?? "N/A"}.`,
+        link: buttonLink,
+      });
+    }
+
     await mailer.sendMail({
       from: `FINCALite <${process.env.SMTP_FROM ?? process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
       to: emailTo as string,
@@ -1738,6 +1769,15 @@ export async function notifySubmitterOfSubmission(submissionId: string) {
     const buttonText = submittedBy?.finca_email ? "View Submission" : "Track Submission Status";
 
     console.info(`[notifySubmitterOfSubmission] Sending submission confirmation email for submission ${submissionId} to submitter ${emailTo}`);
+
+    if (submittedBy?.finca_email) {
+      notifier.notifyInternalUser({
+        to: emailTo as string,
+        subject: `Submission Confirmation: "${submission.formName}"`,
+        message: `We have successfully received your submission (${submission.formName}). Reference: ${submission.reference ?? "N/A"}.`,
+        link: buttonLink,
+      });
+    }
 
     await mailer.sendMail({
       from: `FINCALite <${process.env.SMTP_FROM ?? process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
@@ -1813,6 +1853,17 @@ export async function notifyTreaters(submissionId: string) {
     console.info(`[notifyTreaters] Sending treatment notification for submission ${submissionId} to: ${eligibleTreaters.map((t) => t.finca_email).join(", ")}`);
 
     for (const treater of eligibleTreaters) {
+      const prefs = treater.notificationPreferences as any;
+      // Default teams to true if undefined
+      if (prefs?.channels?.teams !== false) {
+        notifier.send({
+          to: treater.finca_email!,
+          subject: `Action Required: "${submission.formName}" is ready for treatment`,
+          message: `A form submission (${submission.formName}) has been fully signed and is now ready for processing by your unit. Submitted by: ${submitterName}. Reference: ${submission.reference ?? "N/A"}.`,
+          link: `${appUrl}/dashboard/action-center`,
+        });
+      }
+
       mailer.sendMail({
         from: `FINCALite <${process.env.SMTP_FROM ?? process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
         to: treater.finca_email!,

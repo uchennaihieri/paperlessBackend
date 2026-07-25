@@ -94,7 +94,7 @@ router.get("/notification-preferences", async (req: AuthRequest, res: Response) 
   }
 
   const defaultPrefs = {
-    channels: { email: true, teams: false },
+    channels: { email: true, teams: true },
     patterns: {
       onSubmitForm: false,
       onToSign: true,
