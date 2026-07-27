@@ -80,6 +80,7 @@ model FormTemplate {
   isPublic               Boolean                  @default(false)
   publicSlug             String?                  @unique
   templateMappings       Json?
+  conditionalRouting     Json?
   requestBatches         FormRequestBatch[]
   submissions            FormSubmission[]
   pdfTemplate            PdfTemplate?             @relation(fields: [pdfTemplateId], references: [id])
@@ -109,6 +110,9 @@ model FormSubmission {
   delegatedTo          String?
   correctionRequests   Json?
   treaterBranch        String?                  @db.VarChar(100)
+  resolvedTreaterBranch String?                 @db.VarChar(100)
+  resolvedTreaterRole  String?                  @db.VarChar(100)
+  resolvedOwner        String?                  @db.VarChar(100)
   eventAsMaster        Event?                   @relation("MasterSubmission")
   submittedBy          User?                    @relation(fields: [submittedById], references: [id])
   template             FormTemplate             @relation(fields: [templateId], references: [id], onDelete: Cascade)

@@ -124,13 +124,30 @@ router.get("/action-items", async (req: AuthRequest, res: Response) => {
 
   // 1. Current user's branch/role
   branchRoleConditions.push({
-    AND: [
-      { template: { formTreater: { equals: userBranch, mode: "insensitive" as const } } },
+    OR: [
       {
-        OR: [
-          { template: { formTreaterRole: null } },
-          { template: { formTreaterRole: "" } },
-          { template: { formTreaterRole: { equals: req.user?.user_role, mode: "insensitive" as const } } }
+        AND: [
+          { resolvedTreaterBranch: { equals: userBranch, mode: "insensitive" as const } },
+          {
+            OR: [
+              { resolvedTreaterRole: null },
+              { resolvedTreaterRole: "" },
+              { resolvedTreaterRole: { equals: req.user?.user_role, mode: "insensitive" as const } }
+            ]
+          }
+        ]
+      },
+      {
+        AND: [
+          { resolvedTreaterBranch: null },
+          { template: { formTreater: { equals: userBranch, mode: "insensitive" as const } } },
+          {
+            OR: [
+              { template: { formTreaterRole: null } },
+              { template: { formTreaterRole: "" } },
+              { template: { formTreaterRole: { equals: req.user?.user_role, mode: "insensitive" as const } } }
+            ]
+          }
         ]
       }
     ]
@@ -140,13 +157,30 @@ router.get("/action-items", async (req: AuthRequest, res: Response) => {
   for (const del of activeDelegations) {
     if (del.originalUser.branch) {
       branchRoleConditions.push({
-        AND: [
-          { template: { formTreater: { equals: del.originalUser.branch, mode: "insensitive" as const } } },
+        OR: [
           {
-            OR: [
-              { template: { formTreaterRole: null } },
-              { template: { formTreaterRole: "" } },
-              { template: { formTreaterRole: { equals: del.originalUser.user_role, mode: "insensitive" as const } } }
+            AND: [
+              { resolvedTreaterBranch: { equals: del.originalUser.branch, mode: "insensitive" as const } },
+              {
+                OR: [
+                  { resolvedTreaterRole: null },
+                  { resolvedTreaterRole: "" },
+                  { resolvedTreaterRole: { equals: del.originalUser.user_role, mode: "insensitive" as const } }
+                ]
+              }
+            ]
+          },
+          {
+            AND: [
+              { resolvedTreaterBranch: null },
+              { template: { formTreater: { equals: del.originalUser.branch, mode: "insensitive" as const } } },
+              {
+                OR: [
+                  { template: { formTreaterRole: null } },
+                  { template: { formTreaterRole: "" } },
+                  { template: { formTreaterRole: { equals: del.originalUser.user_role, mode: "insensitive" as const } } }
+                ]
+              }
             ]
           }
         ]
@@ -916,7 +950,67 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
   // ── Determine initial status ───────────────────────────────────────────────────────
   const isFullySigned = sigsInput.length === 1 && finalSignatureStatus === "Signed";
 
-  const hasTreater = !!(template?.formTreater && template.formTreater.toLowerCase() !== "none");
+  // ── Evaluate Conditional Routing for Treater and Owner ─────────────────
+  let resolvedTreaterBranch: string | null = null;
+  let resolvedTreaterRole: string | null = null;
+  let resolvedOwner: string | null = null;
+
+  if (template?.conditionalRouting) {
+    try {
+      const routing = typeof template.conditionalRouting === "string" ? JSON.parse(template.conditionalRouting) : template.conditionalRouting;
+      
+      const matchRule = (rule: any) => {
+        const formValue = updatedResponses[rule.fieldId] ?? "";
+        const targetValue = rule.value ?? "";
+        let numFormValue = Number(formValue);
+        let numTargetValue = Number(targetValue);
+        const isNum = !isNaN(numFormValue) && !isNaN(numTargetValue) && formValue !== "" && targetValue !== "";
+
+        switch (rule.operator) {
+          case "==": return isNum ? numFormValue === numTargetValue : String(formValue).toLowerCase() === String(targetValue).toLowerCase();
+          case "!=": return isNum ? numFormValue !== numTargetValue : String(formValue).toLowerCase() !== String(targetValue).toLowerCase();
+          case ">": return isNum ? numFormValue > numTargetValue : false;
+          case "<": return isNum ? numFormValue < numTargetValue : false;
+          case ">=": return isNum ? numFormValue >= numTargetValue : false;
+          case "<=": return isNum ? numFormValue <= numTargetValue : false;
+          case "contains": return String(formValue).toLowerCase().includes(String(targetValue).toLowerCase());
+          default: return false;
+        }
+      };
+
+      const evaluateRules = (ruleGroup: any) => {
+        if (!ruleGroup.rules || ruleGroup.rules.length === 0) return false;
+        if (ruleGroup.logicType === "OR") {
+          return ruleGroup.rules.some(matchRule);
+        }
+        return ruleGroup.rules.every(matchRule);
+      };
+
+      if (routing.treaterRules && Array.isArray(routing.treaterRules)) {
+        for (const ruleGroup of routing.treaterRules) {
+          if (evaluateRules(ruleGroup)) {
+            resolvedTreaterBranch = ruleGroup.branch || null;
+            resolvedTreaterRole = ruleGroup.role || null;
+            break; // Stop at first match
+          }
+        }
+      }
+
+      if (routing.ownerRules && Array.isArray(routing.ownerRules)) {
+        for (const ruleGroup of routing.ownerRules) {
+          if (evaluateRules(ruleGroup)) {
+            resolvedOwner = ruleGroup.owner || null;
+            break;
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Error parsing conditionalRouting:", err);
+    }
+  }
+
+  const actualTreaterBranch = resolvedTreaterBranch || template?.formTreater;
+  const hasTreater = !!(actualTreaterBranch && actualTreaterBranch.toLowerCase() !== "none");
   const submissionPdfType = hasSignableDocument ? "none" : (template?.pdfGeneratorType ?? "none");
 
   const initialStatus = isFullySigned ? (hasTreater ? "Processing" : "Completed") : "Submitted";
@@ -934,6 +1028,9 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
         signingType,
         submittedById: req.user?.id ?? null,
         status: initialStatus, // Use dynamic initial status
+        resolvedTreaterBranch,
+        resolvedTreaterRole,
+        resolvedOwner,
         signatories: {
           create: sigsInput.map((s) => ({
             position: s.position,
@@ -964,6 +1061,9 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
         submittedById: req.user?.id ?? null,
         templateId,
         status: initialStatus, // Use dynamic initial status
+        resolvedTreaterBranch,
+        resolvedTreaterRole,
+        resolvedOwner,
         signatories: {
           create: sigsInput.map((s) => ({
             position: s.position,

@@ -617,6 +617,119 @@ router.post("/set-password", authenticate as any, requireAdmin as any, async (re
 
 
 // ─────────────────────────────────────────────────────────────────────────────
+// POST /api/v1/auth/mobile-oauth
+// Handles Microsoft Entra ID (OAuth) login from the React Native mobile app.
+// Validates the access token via Microsoft Graph API.
+// ─────────────────────────────────────────────────────────────────────────────
+router.post("/mobile-oauth", async (req: Request, res: Response) => {
+  const { employeeId, microsoftAccessToken } = req.body;
+
+  if (!employeeId || !microsoftAccessToken) {
+    res.status(400).json({ success: false, error: "Employee ID and Microsoft Access Token are required.", code: "MISSING_MOBILE_OAUTH_DATA" });
+    return;
+  }
+
+  try {
+    // Validate the token and fetch user profile from Microsoft Graph
+    const graphResponse = await fetch("https://graph.microsoft.com/v1.0/me", {
+      headers: { Authorization: `Bearer ${microsoftAccessToken}` },
+    });
+
+    if (!graphResponse.ok) {
+      res.status(401).json({ success: false, error: "Invalid Microsoft Access Token.", code: "INVALID_MS_TOKEN" });
+      return;
+    }
+
+    const graphData = (await graphResponse.json()) as { mail?: string; userPrincipalName?: string };
+    const email = graphData.mail || graphData.userPrincipalName;
+
+    if (!email) {
+      res.status(400).json({ success: false, error: "Could not retrieve email from Microsoft profile.", code: "MISSING_MS_EMAIL" });
+      return;
+    }
+
+    // Find the user where BOTH employee_id and email match exactly
+    const allUserRows = await prisma.user.findMany({
+      where: { 
+        employee_id: { equals: employeeId.trim(), mode: "insensitive" },
+        finca_email: { equals: email.trim(), mode: "insensitive" },
+        status: { equals: "active", mode: "insensitive" },
+        OR: [{ lock_flag: false }, { lock_flag: null }],
+      }
+    });
+
+    if (!allUserRows || allUserRows.length === 0) {
+      res.status(401).json({ success: false, error: "Invalid credentials. Employee ID does not match the Microsoft email, or account is locked.", code: "OAUTH_MISMATCH" });
+      return;
+    }
+
+    const primaryUser = allUserRows[0];
+
+    // Asynchronously fetch and save Microsoft profile image
+    if (!primaryUser.profileImage) {
+      fetch("https://graph.microsoft.com/v1.0/me/photo/$value", {
+        headers: { Authorization: `Bearer ${microsoftAccessToken}` },
+      })
+        .then(async (photoRes) => {
+          if (photoRes.ok) {
+            const buffer = Buffer.from(await photoRes.arrayBuffer());
+            const contentType = photoRes.headers.get("content-type") || "image/jpeg";
+            const profileImageBase64 = `data:${contentType};base64,${buffer.toString("base64")}`;
+            await prisma.user.updateMany({
+              where: { employee_id: { equals: employeeId.trim(), mode: "insensitive" } },
+              data: { profileImage: profileImageBase64 } as any,
+            });
+          }
+        })
+        .catch(() => {});
+    }
+
+    const roles = allUserRows.map(u => ({
+      id: u.id.toString(),
+      user_role: u.user_role,
+      branch: u.branch,
+      specialAccess: (u as any).specialAccess,
+      user_name: u.user_name,
+      finca_email: u.finca_email,
+      employee_id: u.employee_id,
+    }));
+
+    const tokenPayload = {
+      id: primaryUser.id,
+      email: primaryUser.finca_email,
+      user_name: primaryUser.user_name,
+      user_role: primaryUser.user_role,
+      branch: primaryUser.branch,
+      roles,
+      isLegacyAccount: primaryUser.passwordHash === null,
+      mustResetPassword: false,
+    };
+    
+    const token = jwt.sign(tokenPayload, process.env.JWT_SECRET as string, { expiresIn: "7d" });
+
+    res.json({
+      success: true,
+      token,
+      mustResetPassword: false,
+      isLegacyAccount: primaryUser.passwordHash === null,
+      hasProfileImage: !!primaryUser.profileImage || true,
+      user: {
+        id: primaryUser.id,
+        name: primaryUser.user_name,
+        email: primaryUser.finca_email,
+        user_role: primaryUser.user_role,
+        branch: primaryUser.branch,
+        specialAccess: (primaryUser as any).specialAccess,
+        roles,
+      }
+    });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: "Failed to process Microsoft login.", code: "MS_LOGIN_ERROR" });
+  }
+});
+
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Device Management (admin)
 // ─────────────────────────────────────────────────────────────────────────────
 

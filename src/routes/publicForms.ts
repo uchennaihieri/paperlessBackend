@@ -285,7 +285,73 @@ router.post("/submit/:slug", memUpload.any(), async (req: Request, res: Response
   }
 
   try {
-    const { signatoriesData, initialStatus } = await buildPublicSignatories(template, publicSubmitterName, publicSubmitterEmail, submitterSignature, (req as any).resolvedOfficerId, noSign);
+    let { signatoriesData, initialStatus } = await buildPublicSignatories(template, publicSubmitterName, publicSubmitterEmail, submitterSignature, (req as any).resolvedOfficerId, noSign);
+
+    // ── Evaluate Conditional Routing for Treater and Owner ─────────────────
+    let resolvedTreaterBranch: string | null = null;
+    let resolvedTreaterRole: string | null = null;
+    let resolvedOwner: string | null = null;
+
+    if (template?.conditionalRouting) {
+      try {
+        const routing = typeof template.conditionalRouting === "string" ? JSON.parse(template.conditionalRouting) : template.conditionalRouting;
+        
+        const matchRule = (rule: any) => {
+          const formValue = updatedResponses[rule.fieldId] ?? "";
+          const targetValue = rule.value ?? "";
+          let numFormValue = Number(formValue);
+          let numTargetValue = Number(targetValue);
+          const isNum = !isNaN(numFormValue) && !isNaN(numTargetValue) && formValue !== "" && targetValue !== "";
+
+          switch (rule.operator) {
+            case "==": return isNum ? numFormValue === numTargetValue : String(formValue).toLowerCase() === String(targetValue).toLowerCase();
+            case "!=": return isNum ? numFormValue !== numTargetValue : String(formValue).toLowerCase() !== String(targetValue).toLowerCase();
+            case ">": return isNum ? numFormValue > numTargetValue : false;
+            case "<": return isNum ? numFormValue < numTargetValue : false;
+            case ">=": return isNum ? numFormValue >= numTargetValue : false;
+            case "<=": return isNum ? numFormValue <= numTargetValue : false;
+            case "contains": return String(formValue).toLowerCase().includes(String(targetValue).toLowerCase());
+            default: return false;
+          }
+        };
+
+        const evaluateRules = (ruleGroup: any) => {
+          if (!ruleGroup.rules || ruleGroup.rules.length === 0) return false;
+          if (ruleGroup.logicType === "OR") {
+            return ruleGroup.rules.some(matchRule);
+          }
+          return ruleGroup.rules.every(matchRule);
+        };
+
+        if (routing.treaterRules && Array.isArray(routing.treaterRules)) {
+          for (const ruleGroup of routing.treaterRules) {
+            if (evaluateRules(ruleGroup)) {
+              resolvedTreaterBranch = ruleGroup.branch || null;
+              resolvedTreaterRole = ruleGroup.role || null;
+              break; // Stop at first match
+            }
+          }
+        }
+
+        if (routing.ownerRules && Array.isArray(routing.ownerRules)) {
+          for (const ruleGroup of routing.ownerRules) {
+            if (evaluateRules(ruleGroup)) {
+              resolvedOwner = ruleGroup.owner || null;
+              break;
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Error parsing conditionalRouting:", err);
+      }
+    }
+
+    const actualTreaterBranch = resolvedTreaterBranch || template?.formTreater;
+    const hasTreater = !!(actualTreaterBranch && actualTreaterBranch.toLowerCase() !== "none");
+    const isFullySigned = signatoriesData.length <= 1; // Assuming 1 means only submitter
+    if (isFullySigned) {
+      initialStatus = hasTreater ? "Processing" : "Completed";
+    }
 
     const submission = await prisma.formSubmission.create({
       data: {
@@ -296,6 +362,9 @@ router.post("/submit/:slug", memUpload.any(), async (req: Request, res: Response
         publicSubmitterEmail,
         publicSubmitterName,
         status: initialStatus,
+        resolvedTreaterBranch,
+        resolvedTreaterRole,
+        resolvedOwner,
         signatories: { create: signatoriesData },
       },
     });
