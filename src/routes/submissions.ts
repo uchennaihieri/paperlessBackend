@@ -1685,6 +1685,116 @@ router.patch("/:id/soft-delete", async (req: AuthRequest, res: Response) => {
   res.json({ success: true, data: updated });
 });
 
+// ── POST /api/v1/submissions/:id/reassign-submitter ────────────────────────
+// Administrator can reassign a draft or Awaiting Correction submission to a new user.
+router.post("/:id/reassign-submitter", async (req: AuthRequest, res: Response) => {
+  const isSystemAdmin = req.user?.user_role?.toLowerCase() === "administrator" || req.user?.specialAccess?.toLowerCase().includes("administrator");
+  if (!isSystemAdmin) { res.status(403).json({ success: false, error: "Forbidden: Administrators only" }); return; }
+
+  const { newSubmitterId, reason } = req.body;
+  if (!newSubmitterId || !reason) { res.status(400).json({ success: false, error: "newSubmitterId and reason are required." }); return; }
+
+  const existing = await prisma.formSubmission.findUnique({ where: { id: req.params.id } });
+  if (!existing) { res.status(404).json({ success: false, error: "Submission not found" }); return; }
+
+  const updated = await prisma.formSubmission.update({
+    where: { id: req.params.id },
+    data: { submittedById: Number(newSubmitterId) },
+  });
+
+  await prisma.formAuditTrail.create({
+    data: {
+      submissionId: existing.id,
+      formReference: existing.reference,
+      prevStatus: existing.status,
+      newStatus: existing.status,
+      action: "reassign_submitter",
+      actorName: req.user?.user_name ?? "Administrator",
+      actorEmail: req.user?.email ?? null,
+      note: `Reassigned from user ${existing.submittedById} to user ${newSubmitterId}. Reason: ${reason}`,
+    },
+  }).catch(() => {});
+
+  res.json({ success: true, data: updated });
+});
+
+// ── POST /api/v1/submissions/:id/force-reject ──────────────────────────────
+// Administrator can forcibly reject any active submission.
+router.post("/:id/force-reject", async (req: AuthRequest, res: Response) => {
+  const isSystemAdmin = req.user?.user_role?.toLowerCase() === "administrator" || req.user?.specialAccess?.toLowerCase().includes("administrator");
+  if (!isSystemAdmin) { res.status(403).json({ success: false, error: "Forbidden: Administrators only" }); return; }
+
+  const { reason } = req.body;
+  if (!reason) { res.status(400).json({ success: false, error: "A reason is required." }); return; }
+
+  const existing = await prisma.formSubmission.findUnique({ where: { id: req.params.id } });
+  if (!existing) { res.status(404).json({ success: false, error: "Submission not found" }); return; }
+
+  const updated = await prisma.formSubmission.update({
+    where: { id: req.params.id },
+    data: { status: "Rejected" },
+  });
+
+  if (existing.reference) {
+    await prisma.journalEntry.updateMany({
+      where: { sessionRef: existing.reference },
+      data: { committed: false },
+    });
+  }
+
+  await prisma.formAuditTrail.create({
+    data: {
+      submissionId: existing.id,
+      formReference: existing.reference,
+      prevStatus: existing.status,
+      newStatus: "Rejected",
+      action: "force_reject",
+      actorName: req.user?.user_name ?? "Administrator",
+      actorEmail: req.user?.email ?? null,
+      note: reason,
+    },
+  }).catch(() => {});
+
+  res.json({ success: true, data: updated });
+});
+
+// ── POST /api/v1/submissions/:id/bypass-correction ─────────────────────────
+// Administrator can bypass an Awaiting Correction state.
+router.post("/:id/bypass-correction", async (req: AuthRequest, res: Response) => {
+  const isSystemAdmin = req.user?.user_role?.toLowerCase() === "administrator" || req.user?.specialAccess?.toLowerCase().includes("administrator");
+  if (!isSystemAdmin) { res.status(403).json({ success: false, error: "Forbidden: Administrators only" }); return; }
+
+  const { reason } = req.body;
+  if (!reason) { res.status(400).json({ success: false, error: "A reason is required." }); return; }
+
+  const existing = await prisma.formSubmission.findUnique({ where: { id: req.params.id } });
+  if (!existing) { res.status(404).json({ success: false, error: "Submission not found" }); return; }
+
+  if (existing.status !== "Awaiting Correction") {
+    res.status(400).json({ success: false, error: "Submission is not in 'Awaiting Correction' state." }); return;
+  }
+
+  const updated = await prisma.formSubmission.update({
+    where: { id: req.params.id },
+    data: { status: "Processing" },
+  });
+
+  await prisma.formAuditTrail.create({
+    data: {
+      submissionId: existing.id,
+      formReference: existing.reference,
+      prevStatus: existing.status,
+      newStatus: "Processing",
+      action: "bypass_correction",
+      actorName: req.user?.user_name ?? "Administrator",
+      actorEmail: req.user?.email ?? null,
+      note: reason,
+    },
+  }).catch(() => {});
+
+  res.json({ success: true, data: updated });
+});
+
 // ── POST /api/v1/submissions/:id/request-correction ──────────────────────────
 router.post("/:id/request-correction", async (req: AuthRequest, res: Response) => {
   const { correctionRequests } = req.body;

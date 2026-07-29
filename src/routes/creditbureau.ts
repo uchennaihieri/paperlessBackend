@@ -75,7 +75,7 @@ const SKIP_REPORT_KEYS = new Set(["DataTicket", "statusCode", "status"]);
 function buildKVRows(obj: Record<string, any>): string {
   return Object.entries(obj)
     .filter(([, v]) => v !== null && v !== undefined && v !== "")
-    .map(([k, v]) => `<tr><td class="lbl">${k.replace(/([A-Z])/g," $1").trim()}</td><td>${typeof v === "object" ? JSON.stringify(v) : String(v)}</td></tr>`)
+    .map(([k, v]) => `<tr><td class="lbl">${k.replace(/([A-Z])/g, " $1").trim()}</td><td>${typeof v === "object" ? JSON.stringify(v) : String(v)}</td></tr>`)
     .join("");
 }
 
@@ -115,10 +115,10 @@ async function generateCrbPdf(opts: {
   report?: any; // full detailed credit report (optional)
 }): Promise<string> {
   const { reference, bvn, subjectName, status, matchCount,
-          enquiryReason, verifiedBy, checkedAt, matched, report } = opts;
+    enquiryReason, verifiedBy, checkedAt, matched, report } = opts;
 
   const statusColour = status === "Match Found" ? "#059669" : status === "No Match" ? "#d97706" : "#dc2626";
-  const statusBg     = status === "Match Found" ? "#ecfdf5" : status === "No Match" ? "#fffbeb" : "#fef2f2";
+  const statusBg = status === "Match Found" ? "#ecfdf5" : status === "No Match" ? "#fffbeb" : "#fef2f2";
 
   const matchRows = matched.map((m, i) => {
     const name = [m.FirstName, m.SecondName, m.Surname].filter(Boolean).join(" ") || "—";
@@ -216,10 +216,10 @@ async function generateCrPdf(opts: {
   report?: { AccountSummaries?: CRAccountSummary[]; PerformanceSummary?: CRPerformanceSummary } | null;
 }): Promise<string> {
   const { reference, bvn, subjectName, status, matchCount,
-          verifiedBy, checkedAt, searchResult, report } = opts;
+    verifiedBy, checkedAt, searchResult, report } = opts;
 
   const statusColour = status === "Match Found" ? "#059669" : status === "No Match" ? "#d97706" : "#dc2626";
-  const statusBg     = status === "Match Found" ? "#ecfdf5" : status === "No Match" ? "#fffbeb" : "#fef2f2";
+  const statusBg = status === "Match Found" ? "#ecfdf5" : status === "No Match" ? "#fffbeb" : "#fef2f2";
 
   // Search result rows
   const searchRows = searchResult.map((r, i) => `
@@ -239,12 +239,12 @@ async function generateCrPdf(opts: {
   if (report?.AccountSummaries && report.AccountSummaries.length > 0) {
     const s = report.AccountSummaries[0];
     const types = [
-      { name: "Revolving",   count: s.Count_Revolving,   balance: s.Balance_Revolving,   limit: s.CreditLimit_Revolving,   payment: s.Payment_Revolving },
+      { name: "Revolving", count: s.Count_Revolving, balance: s.Balance_Revolving, limit: s.CreditLimit_Revolving, payment: s.Payment_Revolving },
       { name: "Installment", count: s.Count_Installment, balance: s.Balance_Installment, limit: s.CreditLimit_Installment, payment: s.Payment_Installment },
-      { name: "Auto",        count: s.Count_Auto,        balance: s.Balance_Auto,        limit: s.CreditLimit_Auto,        payment: s.Payment_Auto },
-      { name: "Mortgage",    count: s.Count_Mortgage,    balance: s.Balance_Mortgage,    limit: s.CreditLimit_Mortgage,    payment: s.Payment_Mortgage },
-      { name: "Overdraft",   count: s.Count_Overdraft,   balance: s.Balance_Overdraft,   limit: s.CreditLimit_Overdraft,   payment: s.Minimum_Payment },
-      { name: "Other",       count: s.Count_Other,       balance: s.Balance_Other,       limit: s.CreditLimit_Other,       payment: s.Payment_Other },
+      { name: "Auto", count: s.Count_Auto, balance: s.Balance_Auto, limit: s.CreditLimit_Auto, payment: s.Payment_Auto },
+      { name: "Mortgage", count: s.Count_Mortgage, balance: s.Balance_Mortgage, limit: s.CreditLimit_Mortgage, payment: s.Payment_Mortgage },
+      { name: "Overdraft", count: s.Count_Overdraft, balance: s.Balance_Overdraft, limit: s.CreditLimit_Overdraft, payment: s.Minimum_Payment },
+      { name: "Other", count: s.Count_Other, balance: s.Balance_Other, limit: s.CreditLimit_Other, payment: s.Payment_Other },
     ].filter(t => t.count > 0);
     const totalRow = { name: "Total", count: s.Count_Total, balance: s.Balance_Total, limit: s.CreditLimit_Total, payment: s.Payment_Total };
 
@@ -360,20 +360,22 @@ router.get("/logs", async (req: AuthRequest, res: Response) => {
   where.verifiedBy = req.user?.email || "Unknown";
   if (search) {
     where.OR = [
-      { reference:   { contains: search, mode: "insensitive" } },
+      { reference: { contains: search, mode: "insensitive" } },
       { subjectName: { contains: search, mode: "insensitive" } },
-      { bvn:         { contains: search } },
-      { verifiedBy:  { contains: search, mode: "insensitive" } },
+      { bvn: { contains: search } },
+      { verifiedBy: { contains: search, mode: "insensitive" } },
     ];
   }
   const [total, data] = await Promise.all([
     prisma.creditBureauLog.count({ where }),
     prisma.creditBureauLog.findMany({
       where, orderBy: { createdAt: "desc" }, skip, take: parseInt(limit),
-      select: { id: true, reference: true, bureau: true, bvn: true,
+      select: {
+        id: true, reference: true, bureau: true, bvn: true,
         subjectName: true, status: true, matchCount: true, pdfPath: true,
         enquiryReason: true, verifiedBy: true, createdAt: true,
-        requestData: true, responseData: true, reportData: true },
+        requestData: true, responseData: true, reportData: true
+      },
     }),
   ]);
   res.json({ success: true, data, total, page: parseInt(page), limit: parseInt(limit) });
@@ -382,9 +384,12 @@ router.get("/logs", async (req: AuthRequest, res: Response) => {
 // ── GET /api/v1/credit-bureau/lookup/:bvn ────────────────────────────────────
 router.get("/lookup/:bvn", async (req: AuthRequest, res: Response) => {
   const { bvn } = req.params;
+  const { bureau } = req.query;
   try {
+    const where: any = { bvn };
+    if (bureau) where.bureau = bureau;
     const log = await prisma.creditBureauLog.findFirst({
-      where: { bvn },
+      where,
       orderBy: { createdAt: "desc" },
     });
     res.json({ success: true, data: log || null });
@@ -522,7 +527,7 @@ router.post("/consumer/bvn", async (req: AuthRequest, res: Response) => {
 
     if (existingLog) {
       if (existingLog.pdfPath) {
-        try { fs.unlinkSync(existingLog.pdfPath); } catch {}
+        try { fs.unlinkSync(existingLog.pdfPath); } catch { }
       }
       newLog = await prisma.creditBureauLog.update({
         where: { id: existingLog.id },
@@ -597,6 +602,7 @@ router.post("/consumer/bvn", async (req: AuthRequest, res: Response) => {
     res.json({
       success: true, reference: existingLog.reference, status: existingLog.status,
       count: existingLog.matchCount, matched: respData?.matched ?? [],
+      report: existingLog.reportData,
       id: existingLog.id, bureau: "firstcentral",
       bvn: existingLog.bvn, subjectName: existingLog.subjectName,
       verifiedBy: existingLog.verifiedBy, createdAt: existingLog.createdAt.toISOString(),
@@ -612,7 +618,7 @@ router.post("/consumer/bvn", async (req: AuthRequest, res: Response) => {
     status = "Failed";
   }
 
-  const best        = [...matchResult.matched].sort((a, b) => Number(b.MatchingRate) - Number(a.MatchingRate))[0];
+  const best = [...matchResult.matched].sort((a, b) => Number(b.MatchingRate) - Number(a.MatchingRate))[0];
   const subjectName = best ? [best.FirstName, best.SecondName, best.Surname].filter(Boolean).join(" ") : "";
   const reference = existingLog ? existingLog.reference : await generateRef("FCB");
 
@@ -633,7 +639,7 @@ router.post("/consumer/bvn", async (req: AuthRequest, res: Response) => {
   let newLog: any;
   if (existingLog) {
     if (existingLog.pdfPath) {
-      try { fs.unlinkSync(existingLog.pdfPath); } catch {}
+      try { fs.unlinkSync(existingLog.pdfPath); } catch { }
     }
     newLog = await prisma.creditBureauLog.update({
       where: { id: existingLog.id },
@@ -681,6 +687,7 @@ router.post("/consumer/bvn", async (req: AuthRequest, res: Response) => {
   res.json({
     success: true, reference, status,
     count: matchResult.count, matched: matchResult.matched,
+    report: reportData,
     id: newLog.id, bureau: newLog.bureau,
     bvn: newLog.bvn, subjectName: newLog.subjectName,
     verifiedBy: newLog.verifiedBy, createdAt: newLog.createdAt.toISOString(),
@@ -727,9 +734,9 @@ router.post("/consumer/report", async (req: AuthRequest, res: Response) => {
   try {
     report = await getConsumerDetailedCreditReport({
       consumerID: String(consumerID),
-      enquiryID:  String(enquiryID),
+      enquiryID: String(enquiryID),
       subscriberEnquiryEngineID: String(subscriberEnquiryEngineID),
-      productId:  Number(productId),
+      productId: Number(productId),
     });
   } catch (err: any) {
     logger.error("FirstCentral report fetch failed:", err);
@@ -746,9 +753,9 @@ router.post("/consumer/report", async (req: AuthRequest, res: Response) => {
   // Regenerate PDF with full report data in background
   setImmediate(async () => {
     try {
-      const matchData  = log.responseData as any;
-      const matched    = matchData?.matched ?? [];
-      const pdfPath    = await generateCrbPdf({
+      const matchData = log.responseData as any;
+      const matched = matchData?.matched ?? [];
+      const pdfPath = await generateCrbPdf({
         reference, bvn: log.bvn, subjectName: log.subjectName,
         status: log.status, matchCount: log.matchCount,
         enquiryReason: log.enquiryReason,
