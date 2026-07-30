@@ -286,7 +286,7 @@ router.get("/queue", async (req: AuthRequest, res: Response) => {
         signatories: {
           some: { email: { in: targetEmails, mode: "insensitive" }, status: "Pending" },
         },
-        status: { notIn: ["Awaiting Final Approval", "Rejected", "Not Approved", "Completed"] },
+        status: { notIn: ["Awaiting Final Approval", "Rejected", "Not Approved", "Completed", "Deleted"] },
       },
       include: {
         signatories: { orderBy: { position: "asc" } },
