@@ -26,7 +26,7 @@ router.get("/", async (req: Request, res: Response) => {
     if (!doc) { res.status(404).send("Document not found"); return; }
 
     res.set({
-      "Content-Type":        doc.mimeType || "application/octet-stream",
+      "Content-Type": doc.mimeType || "application/octet-stream",
       "Content-Disposition": `inline; filename="${doc.originalName}"`,
     });
 
@@ -54,7 +54,7 @@ router.get("/", async (req: Request, res: Response) => {
   if (!record) { res.status(404).send("File not found"); return; }
 
   res.set({
-    "Content-Type":        record.mimeType || "application/octet-stream",
+    "Content-Type": record.mimeType || "application/octet-stream",
     "Content-Disposition": `inline; filename="${record.originalName}"`,
   });
 

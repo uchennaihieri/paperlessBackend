@@ -1,8 +1,9 @@
-import prisma from "./prisma";
-import { logger } from "./logger";
+import cron from "node-cron";
+import prisma from "../lib/prisma";
+import { logger } from "../lib/logger";
 
 export async function runEventCronCheck() {
-  logger.info("📅 Running Event Auto-Signature Cron Check...");
+  logger.info("Running Event Auto-Signature Cron Check...");
   try {
     const now = new Date();
     const oneHourFromNow = new Date(now.getTime() + 60 * 60 * 1000);
@@ -81,16 +82,16 @@ export async function runEventCronCheck() {
       });
     }
 
-    // ── Cleanup old PdfTemp rows (> 24 hours) ──────────────────────────────
+    // Cleanup old PdfTemp rows (> 24 hours)
     const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
     const deletedTempPdfs = await prisma.pdfTemp.deleteMany({
       where: { createdAt: { lt: oneDayAgo } }
     });
     if (deletedTempPdfs.count > 0) {
-      logger.info(`🧹 Cleaned up ${deletedTempPdfs.count} old temporary PDFs.`);
+      logger.info(`Cleaned up ${deletedTempPdfs.count} old temporary PDFs.`);
     }
 
-    // ── Cleanup 14-day old Local Sync Files ──────────────────────────────────
+    // Cleanup 14-day old Local Sync Files
     const fourteenDaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
     const oldSyncedFiles = await prisma.sharepointSyncQueue.findMany({
       where: {
@@ -111,7 +112,7 @@ export async function runEventCronCheck() {
       await prisma.sharepointSyncQueue.deleteMany({
         where: { id: { in: oldSyncedFiles.map((f: any) => f.id) } }
       });
-      logger.info(`🧹 Cleaned up ${deletedCount} 14-day old local SharePoint uploads.`);
+      logger.info(`Cleaned up ${deletedCount} 14-day old local SharePoint uploads.`);
     }
 
   } catch (e) {
@@ -120,6 +121,6 @@ export async function runEventCronCheck() {
 }
 
 export function startEventCron() {
-  logger.info("📅 Starting Event Auto-Signature Cron Worker in interval mode...");
-  setInterval(runEventCronCheck, 15 * 60 * 1000);
+  logger.info("Scheduling Event Auto-Signature Cron Check (runs every 15 minutes)...");
+  cron.schedule("*/15 * * * *", runEventCronCheck);
 }

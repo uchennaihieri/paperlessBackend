@@ -142,13 +142,13 @@ app.use(errorHandler);
 //   logger.info(`🚀  Paperless API listening on http://localhost:${PORT}`);
 // });
 
-import { startEventCron } from "./lib/eventCron";
+import { startAllCrons } from "./cron/index";
 
 app.listen(Number(PORT), "0.0.0.0", () => {
   logger.info(`🚀 Paperless API listening on port ${PORT}`);
   startPdfWorker();
   startSharepointWorker();
-  startEventCron();
+  startAllCrons();
 });
 
 export default app;
