@@ -99,8 +99,9 @@ crmRouter.post("/", async (req, res, next) => {
         });
         
         if (existingRecord) {
-          const rowData = typeof existingRecord.rowData === 'object' && existingRecord.rowData !== null 
-            ? { ...existingRecord.rowData } 
+          const existingData = (existingRecord.rowData as any) || {};
+          const rowData = typeof existingData === 'object' && !Array.isArray(existingData) 
+            ? { ...existingData } 
             : {};
           
           updatedRecord = await tx.datasetRecord.update({
