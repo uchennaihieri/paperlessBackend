@@ -91,7 +91,6 @@ export async function consumerMatchByBvn(
     Accountno: "",
     ProductID: String(productId),
   };
-  // logger.info(`FirstCentral ConnectConsumerMatch Request: ${JSON.stringify({ ...reqBody, DataTicket: "***" })}`);
 
   const res = await fetch(`${BASE_URL}/ConnectConsumerMatch`, {
     method: "POST",
@@ -109,7 +108,6 @@ export async function consumerMatchByBvn(
   }
 
   const rawText = await res.text();
-  // logger.info(`FirstCentral ConnectConsumerMatch Response: ${rawText}`);
   const raw: any = JSON.parse(rawText);
 
   // FirstCentral returns an array of section objects, merge them into one object
@@ -149,7 +147,6 @@ export async function getConsumerDetailedCreditReport(opts: {
     SubscriberEnquiryEngineID: subscriberEnquiryEngineID,
     productid: productId,   // number, not string
   };
-  // logger.info(`FirstCentral GetConsumerFullCreditReport Request: ${JSON.stringify({ ...reqBody, DataTicket: "***" })}`);
 
   const res = await fetch(`${BASE_URL}/GetConsumerFullCreditReport`, {
     method: "POST",
@@ -164,7 +161,6 @@ export async function getConsumerDetailedCreditReport(opts: {
   }
 
   const rawText = await res.text();
-  // logger.info(`FirstCentral GetConsumerFullCreditReport Response: ${rawText}`);
   const raw: any = JSON.parse(rawText);
   // FirstCentral returns an array of section objects, merge them into one object
   const payload = Array.isArray(raw) ? raw.reduce((acc, curr) => Object.assign(acc, curr), {}) : raw;
@@ -173,7 +169,6 @@ export async function getConsumerDetailedCreditReport(opts: {
   // multiple consumers could match. Re-call with the merged consumerID list
   // to get the actual credit report.
   if (payload?.SubjectList && Array.isArray(payload.SubjectList) && payload.SubjectList.length > 0) {
-    // logger.info(`FirstCentral SubjectList received (${payload.SubjectList.length} subjects) — resolving to full report`);
     const mergeList = payload.SubjectList.map((s: any) => s.ConsumerID ?? s.Reference).filter(Boolean).join(",");
 
     const reqBody2 = {
@@ -184,7 +179,6 @@ export async function getConsumerDetailedCreditReport(opts: {
       SubscriberEnquiryEngineID: subscriberEnquiryEngineID,
       productid: productId,
     };
-    // logger.info(`FirstCentral GetConsumerFullCreditReport (resolved) Request: ${JSON.stringify({ ...reqBody2, DataTicket: "***" })}`);
 
     const res2 = await fetch(`${BASE_URL}/GetConsumerFullCreditReport`, {
       method: "POST",
@@ -199,7 +193,6 @@ export async function getConsumerDetailedCreditReport(opts: {
     }
 
     const rawText2 = await res2.text();
-    // logger.info(`FirstCentral GetConsumerFullCreditReport (resolved) Response: ${rawText2}`);
     const raw2: any = JSON.parse(rawText2);
     const payload2 = Array.isArray(raw2) ? raw2.reduce((acc, curr) => Object.assign(acc, curr), {}) : raw2;
 

@@ -37,6 +37,7 @@ model User {
   devices                 DeviceRegistration[]
   createdFolders          FileFolder[]
   folderAccess            FileFolderAccess[]
+  bugReports              BugReport[]
 
   @@map("users")
 }
@@ -612,4 +613,65 @@ model SharepointSyncQueue {
   fileId       String?  
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+}
+
+model BugReport {
+  id            Int              @id @default(autoincrement())
+  title         String
+  description   String
+  type          String           @default("bug")
+  isAnonymous   Boolean          @default(false)
+  status        String           @default("Open")
+  postedById    Int
+  fixedByEmail  String?
+  fixComment    String?
+  fixedAt       DateTime?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  postedBy      User             @relation(fields: [postedById], references: [id])
+  attachments   BugAttachment[]
+  comments      BugComment[]
+  upvotes       BugUpvote[]
+
+  @@map("bug_reports")
+}
+
+model BugAttachment {
+  id            String      @id @default(cuid())
+  bugReportId   Int
+  originalName  String
+  filePath      String
+  mimeType      String      @default("application/octet-stream")
+  size          Int         @default(0)
+  uploadedAt    DateTime    @default(now())
+
+  bugReport     BugReport   @relation(fields: [bugReportId], references: [id], onDelete: Cascade)
+
+  @@map("bug_attachments")
+}
+
+model BugComment {
+  id            String      @id @default(cuid())
+  bugReportId   Int
+  authorName    String
+  authorEmail   String
+  content       String
+  createdAt     DateTime    @default(now())
+
+  bugReport     BugReport   @relation(fields: [bugReportId], references: [id], onDelete: Cascade)
+
+  @@map("bug_comments")
+}
+
+model BugUpvote {
+  id            String      @id @default(cuid())
+  bugReportId   Int
+  userEmail     String
+  createdAt     DateTime    @default(now())
+
+  bugReport     BugReport   @relation(fields: [bugReportId], references: [id], onDelete: Cascade)
+
+  @@unique([bugReportId, userEmail])
+  @@map("bug_upvotes")
 }
