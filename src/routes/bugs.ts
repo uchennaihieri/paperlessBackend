@@ -5,6 +5,7 @@ import { storeDocumentLocally } from "../lib/storage";
 import { mailer } from "../lib/mailer";
 import { notifier } from "../lib/notifier";
 import { logger } from "../lib/logger";
+import { isSharePointEnabled, downloadFromSharePoint } from "../lib/sharepoint";
 
 export const bugsRouter = Router();
 
