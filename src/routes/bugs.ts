@@ -415,10 +415,15 @@ bugsRouter.put("/:id/fix", async (req, res, next) => {
       },
     });
 
-    // Notify the original poster (both email and Teams)
+    // Notify the original poster and resolver (both email and Teams)
     const posterEmail = bug.postedBy?.finca_email;
-    if (posterEmail) {
-      const subject = `Your ${bug.type === "feature" ? "feature request" : "bug report"} #${bug.id} has been resolved`;
+    const emailsToNotify = new Set<string>();
+    
+    if (posterEmail) emailsToNotify.add(posterEmail);
+    if (fixedByEmail) emailsToNotify.add(fixedByEmail);
+
+    if (emailsToNotify.size > 0) {
+      const subject = `${bug.type === "feature" ? "Feature request" : "Bug report"} #${bug.id} has been resolved`;
       const htmlBody = `
         <div style="font-family: Arial, sans-serif; max-width: 600px;">
           <h2 style="color: #16a34a;">Issue Resolved ✓</h2>
@@ -436,17 +441,19 @@ bugsRouter.put("/:id/fix", async (req, res, next) => {
         </div>
       `;
 
-      mailer.sendMail({
-        to: posterEmail,
-        subject,
-        html: htmlBody,
-      }).catch((err) => logger.error(`Fix notification email failed for ${posterEmail}: ${err}`));
+      for (const email of emailsToNotify) {
+        mailer.sendMail({
+          to: email,
+          subject,
+          html: htmlBody,
+        }).catch((err) => logger.error(`Fix notification email failed for ${email}: ${err}`));
 
-      notifier.notifyInternalUser({
-        to: posterEmail,
-        subject,
-        message: `Your ${bug.type === "feature" ? "feature request" : "bug report"} "${bug.title}" has been resolved.${fixComment ? ` Notes: ${fixComment}` : ""}`,
-      }).catch((err) => logger.error(`Fix Teams notification failed for ${posterEmail}: ${err}`));
+        notifier.notifyInternalUser({
+          to: email,
+          subject,
+          message: `${bug.type === "feature" ? "Feature request" : "Bug report"} "${bug.title}" has been resolved.${fixComment ? ` Notes: ${fixComment}` : ""}`,
+        }).catch((err) => logger.error(`Fix Teams notification failed for ${email}: ${err}`));
+      }
     }
 
     res.json(updated);
