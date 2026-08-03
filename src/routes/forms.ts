@@ -442,6 +442,32 @@ router.post("/:id/toggle-public", async (req: AuthRequest, res: Response) => {
   }
 });
 
+// ── POST /api/v1/forms/:id/ensure-slug ───────────────────────────────────────
+router.post("/:id/ensure-slug", authenticate as any, async (req: AuthRequest, res: Response) => {
+  try {
+    const template = await prisma.formTemplate.findUnique({ where: { id: req.params.id } });
+    if (!template) {
+      res.status(404).json({ success: false, error: "Form template not found" });
+      return;
+    }
+
+    if (template.publicSlug) {
+      res.json({ success: true, slug: template.publicSlug });
+      return;
+    }
+
+    const slug = await getUniqueSlug(template.name, template.id);
+    await prisma.formTemplate.update({
+      where: { id: req.params.id },
+      data: { publicSlug: slug },
+    });
+
+    res.json({ success: true, slug });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message, code: "FAILED_TO_ENSURE_SLUG" });
+  }
+});
+
 // ── POST /api/v1/forms/:id/copy ───────────────────────────────────────────────
 router.post("/:id/copy", requireAdmin as any, async (req: AuthRequest, res: Response) => {
   try {
