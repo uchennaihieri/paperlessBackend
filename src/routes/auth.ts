@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma";
 import { mailer } from "../lib/mailer";
+import { queueEmail } from "../lib/notificationService";
 import { authenticate, AuthRequest, requireAdmin } from "../middleware/authenticate";
 
 const router = Router();
@@ -582,9 +583,7 @@ router.post("/set-password", authenticate as any, requireAdmin as any, async (re
 
   if (targetUser?.finca_email) {
     const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
-    try {
-      await mailer.sendMail({
-        from: `FINCALite <${process.env.SMTP_FROM}>`,
+      await queueEmail({
         to: targetUser.finca_email,
         subject: "FINCALite – Your Password Has Been Reset",
         html: `
@@ -604,10 +603,6 @@ router.post("/set-password", authenticate as any, requireAdmin as any, async (re
         `,
       });
       emailSent = true;
-    } catch (e: any) {
-      emailError = e.message ?? "Unknown mail error";
-      console.error("[set-password email]", e);
-    }
   }
 
   res.json({
@@ -764,8 +759,7 @@ router.patch("/devices/:id", authenticate as any, requireAdmin as any, async (re
 
   // Notify user of decision
   if (device.user.finca_email) {
-    mailer.sendMail({
-      from: `FINCALite <${process.env.SMTP_FROM}>`,
+    queueEmail({
       to: device.user.finca_email,
       subject: `FINCALite – Device ${status}`,
       html: `
@@ -779,7 +773,7 @@ router.patch("/devices/:id", authenticate as any, requireAdmin as any, async (re
         }
         </div>
       `,
-    }).catch((e: any) => console.error("[device email]", e));
+    });
   }
 
   res.json({ success: true, data: device });

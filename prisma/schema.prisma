@@ -675,3 +675,18 @@ model BugUpvote {
   @@unique([bugReportId, userEmail])
   @@map("bug_upvotes")
 }
+
+model NotificationQueue {
+  id         String   @id @default(cuid())
+  channel    String   // "EMAIL" or "TEAMS"
+  payload    Json     // { to, subject, html, from, link, message, attachments }
+  status     String   @default("PENDING") // PENDING | PROCESSING | SENT | FAILED
+  attempts   Int      @default(0)
+  maxRetries Int      @default(3)
+  errorLog   String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([status, attempts])
+  @@map("notification_queue")
+}

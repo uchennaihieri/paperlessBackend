@@ -8,7 +8,7 @@ import { authenticate, AuthRequest } from "../middleware/authenticate";
 import { hashToken, decrypt } from "../lib/crypto";
 import { isSharePointEnabled, downloadFromSharePoint } from "../lib/sharepoint";
 import { storeDocumentLocally } from "../lib/storage";
-import { mailer } from "../lib/mailer";
+import { queueEmail } from "../lib/notificationService";
 import { checkAndUnblockPrerequisites, notifyActiveSignatories, notifySuccessfulCompletion, notifySubmitterOfSubmission, notifyTreaters } from "./workflow";
 
 // Files are always buffered in memory; they go straight to SharePoint (or disk)
@@ -1341,8 +1341,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
           // Notify the target email
           const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
           const fillUrl = `${appUrl}/dashboard/forms/draft/${prereqSub.id}`;
-          mailer.sendMail({
-            from: `FINCALite <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
+          queueEmail({
             to: targetEmail,
             subject: `Action Required: Please complete the "${targetTemplate.name}" form`,
             html: `
@@ -1363,7 +1362,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
                 <p style="font-size: 12px; color: #9ca3af; margin-top: 24px;">If you believe this was sent in error, please contact your administrator.</p>
               </div>
             `,
-          }).catch((e: any) => console.error("[prereq email]", e));
+          });
 
         } else {
           // PENDING: Queue for later, do not create draft or send email yet
@@ -1507,7 +1506,7 @@ router.post("/:id/delegate", async (req: AuthRequest, res: Response) => {
 
   // Notify the user
   const submissionLink = `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/dashboard/forms/submissions/${submission.id}`;
-  await mailer.sendMail({
+  await queueEmail({
     to: targetUser.finca_email as string,
     subject: `Form Delegated: ${submission.formName}`,
     html: `
@@ -1520,7 +1519,7 @@ router.post("/:id/delegate", async (req: AuthRequest, res: Response) => {
         <a href="${submissionLink}" style="display: inline-block; background: #4F46E5; color: #fff; padding: 10px 20px; text-decoration: none; border-radius: 5px; margin-top: 15px;">View Submission</a>
       </div>
     `
-  }).catch(console.error);
+  });
 
   res.json({ success: true, message: "Form delegated successfully" });
 });
@@ -1857,7 +1856,7 @@ router.post("/:id/request-correction", async (req: AuthRequest, res: Response) =
         const baseUrl = process.env.FRONTEND_URL || "https://paperless-production-a511.up.railway.app";
         const correctionUrl = `${baseUrl}/${submission.template.publicSlug}?mode=correction&ref=${submission.reference}&email=${encodeURIComponent(submission.publicSubmitterEmail)}`;
         
-        await mailer.sendMail({
+        await queueEmail({
           to: submission.publicSubmitterEmail,
           subject: `Correction Required: ${submission.formName}`,
           html: `

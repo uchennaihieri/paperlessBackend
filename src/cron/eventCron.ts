@@ -91,12 +91,12 @@ export async function runEventCronCheck() {
       logger.info(`Cleaned up ${deletedTempPdfs.count} old temporary PDFs.`);
     }
 
-    // Cleanup 14-day old Local Sync Files
-    const fourteenDaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+    // Cleanup 30-day old Local Sync Files
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
     const oldSyncedFiles = await prisma.sharepointSyncQueue.findMany({
       where: {
         status: "Completed",
-        updatedAt: { lt: fourteenDaysAgo }
+        updatedAt: { lt: thirtyDaysAgo }
       }
     });
 
@@ -104,15 +104,18 @@ export async function runEventCronCheck() {
       const fs = require("fs");
       let deletedCount = 0;
       for (const file of oldSyncedFiles) {
-        if (fs.existsSync(file.localPath)) {
-          fs.unlinkSync(file.localPath);
+        try {
+          await fs.promises.access(file.localPath);
+          await fs.promises.unlink(file.localPath);
           deletedCount++;
+        } catch (err) {
+          // File does not exist or cannot be accessed, safely ignore
         }
       }
       await prisma.sharepointSyncQueue.deleteMany({
         where: { id: { in: oldSyncedFiles.map((f: any) => f.id) } }
       });
-      logger.info(`Cleaned up ${deletedCount} 14-day old local SharePoint uploads.`);
+      logger.info(`Cleaned up ${deletedCount} 30-day old local SharePoint uploads.`);
     }
 
   } catch (e) {

@@ -3,8 +3,7 @@ import { Router, Response } from "express";
 import prisma from "../lib/prisma";
 import { authenticate, AuthRequest } from "../middleware/authenticate";
 import { hashToken, decrypt } from "../lib/crypto";
-import { mailer } from "../lib/mailer";
-import { notifier } from "../lib/notifier";
+import { queueEmail, queueTeams, queueNotification } from "../lib/notificationService";
 import { generateSubmissionPdf, generateContractPdf } from "../lib/pdfGenerator";
 import { isSharePointEnabled, downloadFromSharePoint } from "../lib/sharepoint";
 import { storeDocumentLocally } from "../lib/storage";
@@ -120,8 +119,7 @@ export async function activatePrerequisite(prereqId: string, mainSubmissionId: s
     // NOTE: The UI route may be /draft/ or /submission/, sticking to /draft/ as requested
     const fillUrl = `${appUrl}/dashboard/forms/draft/${prereqSub.id}`;
     
-    mailer.sendMail({
-      from: `FINCALite <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
+    queueEmail({
       to: targetEmail,
       subject: `Action Required: Please complete the "${targetTemplate.name}" form`,
       html: `
@@ -142,7 +140,7 @@ export async function activatePrerequisite(prereqId: string, mainSubmissionId: s
           <p style="font-size: 12px; color: #9ca3af; margin-top: 24px;">If you believe this was sent in error, please contact your administrator.</p>
         </div>
       `,
-    }).catch((e: any) => console.error("[prereq email]", e));
+    });
 
   } catch (err) {
     console.error("[prerequisites] Failed to activate prerequisite:", err);
@@ -915,8 +913,7 @@ router.post("/:id/disapprove-final", async (req: AuthRequest, res: Response) => 
   // Send email to submitter
   if (sub.submittedBy?.finca_email) {
     const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
-    mailer.sendMail({
-      from: `FINCALite <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
+    queueEmail({
       to: sub.submittedBy.finca_email,
       subject: `Submission Disapproved: "${sub.formName}"`,
       html: `
@@ -936,7 +933,7 @@ router.post("/:id/disapprove-final", async (req: AuthRequest, res: Response) => 
           <a href="${appUrl}/dashboard/forms/submission/${req.params.id}" style="display: inline-block; background: #ef4444; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; margin-top: 8px;">View Submission</a>
         </div>
       `,
-    }).catch((e: any) => console.error("[disapprove email]", e));
+    });
   }
 
   res.json({ success: true });
@@ -1330,8 +1327,7 @@ router.post("/:id/disapprove-signatory", async (req: AuthRequest, res: Response)
 
   if (currentForDecline?.submittedBy?.finca_email) {
     const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
-    mailer.sendMail({
-      from: `FINCALite <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
+    queueEmail({
       to: currentForDecline.submittedBy.finca_email,
       subject: `Submission Disapproved: "${currentForDecline.formName}"`,
       html: `
@@ -1351,7 +1347,7 @@ router.post("/:id/disapprove-signatory", async (req: AuthRequest, res: Response)
           <a href="${appUrl}/dashboard/forms/submission/${req.params.id}" style="display: inline-block; background: #ef4444; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; margin-top: 8px;">View Submission</a>
         </div>
       `,
-    }).catch((e: any) => console.error("[disapprove email]", e));
+    });
   }
 
   res.json({ success: true });
@@ -1387,8 +1383,7 @@ router.post("/:id/remind/:signatoryId", async (req: AuthRequest, res: Response) 
   const submitterName = submission.submittedBy?.user_name ?? "A colleague";
   const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
 
-  await mailer.sendMail({
-    from: `FINCALite <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
+  await queueEmail({
     to: signatory.email,
     subject: `Reminder: Your signature is required on "${submission.formName}"`,
     html: `
@@ -1542,17 +1537,11 @@ export async function notifyActiveSignatories(submissionId: string, excludeEmail
     for (const signatory of activeSignatories) {
       if (excludeEmail && signatory.email === excludeEmail) continue;
 
-      notifier.notifyInternalUser({
+      await queueNotification({
         to: signatory.email,
         subject: `Action Required: "${submission.formName}" is ready for your signature`,
         message: `A form requires your signature (${submission.formName}). Submitted by: ${submitterName}. Reference: ${submission.reference ?? "N/A"}.`,
         link: `${appUrl}/dashboard/workflow`,
-      });
-
-      await mailer.sendMail({
-        from: `FINCALite <${process.env.SMTP_FROM ?? process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
-        to: signatory.email,
-        subject: `Action Required: "${submission.formName}" is ready for your signature`,
         html: `
           <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
             <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
@@ -1572,9 +1561,7 @@ export async function notifyActiveSignatories(submissionId: string, excludeEmail
             <p style="font-size: 12px; color: #9ca3af; margin-top: 24px;">If you believe this was sent in error, please contact your administrator.</p>
           </div>
         `,
-      }).then(() => {
-        console.info(`[notifyActiveSignatories] Signature request email successfully sent to ${signatory.email}`);
-      }).catch((e: any) => console.error("[notify active signatories email error]", e));
+      });
     }
   } catch (err) {
     console.error("[notifyActiveSignatories] error:", err);
@@ -1602,17 +1589,11 @@ export async function notifyOfficerOfPersonalLink(submissionId: string, officerE
 
     console.info(`[notifyOfficerOfPersonalLink] Sending personal link notification to ${officerEmail}`);
 
-    notifier.notifyInternalUser({
+    await queueNotification({
       to: officerEmail,
       subject: `Your Personal Link Has Been Filled: ${submission.formName}`,
       message: `${message} Reference: ${submission.reference ?? "N/A"}`,
       link: actionUrl,
-    });
-
-    await mailer.sendMail({
-      from: `FINCALite <${process.env.SMTP_FROM ?? process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
-      to: officerEmail,
-      subject: `Your Personal Link Has Been Filled: ${submission.formName}`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
           <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
@@ -1629,9 +1610,7 @@ export async function notifyOfficerOfPersonalLink(submissionId: string, officerE
           <a href="${actionUrl}" style="display: inline-block; background: #B50938; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; margin-top: 8px;">${buttonText}</a>
         </div>
       `,
-    }).then(() => {
-      console.info(`[notifyOfficerOfPersonalLink] Personal link notification successfully sent to ${officerEmail}`);
-    }).catch((e: any) => console.error("[notifyOfficerOfPersonalLink email error]", e));
+    });
   } catch (err) {
     console.error("[notifyOfficerOfPersonalLink] error:", err);
   }
@@ -1652,17 +1631,11 @@ export async function notifyFinalApprover(submissionId: string) {
 
     console.info(`[notifyFinalApprover] Sending final approval request email for submission ${submissionId} to ${submission.approverEmail}`);
 
-    notifier.notifyInternalUser({
+    await queueNotification({
       to: submission.approverEmail,
       subject: `Action Required: Final Approval needed for "${submission.formName}"`,
       message: `A submission (${submission.formName}) is pending your final approval. Submitted by: ${submitterName}. Reference: ${submission.reference ?? "N/A"}.`,
       link: `${appUrl}/dashboard/workflow`,
-    });
-
-    await mailer.sendMail({
-      from: `FINCALite <${process.env.SMTP_FROM ?? process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
-      to: submission.approverEmail,
-      subject: `Action Required: Final Approval needed for "${submission.formName}"`,
       html: `
           <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
             <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
@@ -1683,9 +1656,7 @@ export async function notifyFinalApprover(submissionId: string) {
             <p style="font-size: 12px; color: #9ca3af; margin-top: 24px;">If you believe this was sent in error, please contact your administrator.</p>
           </div>
       `,
-    }).then(() => {
-      console.info(`[notifyFinalApprover] Final approval request email successfully sent to ${submission.approverEmail}`);
-    }).catch((e: any) => console.error("[notify final approver email error]", e));
+    });
   } catch (err) {
     console.error("[notifyFinalApprover] error:", err);
   }
@@ -1712,7 +1683,7 @@ export async function notifySuccessfulCompletion(submissionId: string) {
     console.info(`[notifySuccessfulCompletion] Sending successful completion email for submission ${submissionId} to submitter ${emailTo}`);
 
     if (submittedBy?.finca_email) {
-      notifier.notifyInternalUser({
+      await queueTeams({
         to: emailTo as string,
         subject: `Submission Approved: "${submission.formName}"`,
         message: `Your submission (${submission.formName}) has been successfully approved and completed! Reference: ${submission.reference ?? "N/A"}.`,
@@ -1720,8 +1691,7 @@ export async function notifySuccessfulCompletion(submissionId: string) {
       });
     }
 
-    await mailer.sendMail({
-      from: `FINCALite <${process.env.SMTP_FROM ?? process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
+    await queueEmail({
       to: emailTo as string,
       subject: `Submission Approved: "${submission.formName}"`,
       html: `
@@ -1742,9 +1712,7 @@ export async function notifySuccessfulCompletion(submissionId: string) {
             <p style="font-size: 12px; color: #9ca3af; margin-top: 24px;">If you believe this was sent in error, please contact your administrator.</p>
           </div>
       `,
-    }).then(() => {
-      console.info(`[notifySuccessfulCompletion] Completion email successfully sent to ${emailTo}`);
-    }).catch((e: any) => console.error("[notify successful completion email error]", e));
+    });
   } catch (err) {
     console.error("[notifySuccessfulCompletion] error:", err);
   }
@@ -1771,7 +1739,7 @@ export async function notifySubmitterOfSubmission(submissionId: string) {
     console.info(`[notifySubmitterOfSubmission] Sending submission confirmation email for submission ${submissionId} to submitter ${emailTo}`);
 
     if (submittedBy?.finca_email) {
-      notifier.notifyInternalUser({
+      await queueTeams({
         to: emailTo as string,
         subject: `Submission Confirmation: "${submission.formName}"`,
         message: `We have successfully received your submission (${submission.formName}). Reference: ${submission.reference ?? "N/A"}.`,
@@ -1779,8 +1747,7 @@ export async function notifySubmitterOfSubmission(submissionId: string) {
       });
     }
 
-    await mailer.sendMail({
-      from: `FINCALite <${process.env.SMTP_FROM ?? process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
+    await queueEmail({
       to: emailTo as string,
       subject: `Submission Confirmation: "${submission.formName}"`,
       html: `
@@ -1800,9 +1767,7 @@ export async function notifySubmitterOfSubmission(submissionId: string) {
             <p style="font-size: 12px; color: #9ca3af; margin-top: 24px;">If you believe this was sent in error, please contact your administrator.</p>
           </div>
       `,
-    }).then(() => {
-      console.info(`[notifySubmitterOfSubmission] Submission confirmation email successfully sent to ${emailTo}`);
-    }).catch((e: any) => console.error("[notify submitter email error]", e));
+    });
   } catch (err) {
     console.error("[notifySubmitterOfSubmission] error:", err);
   }
@@ -1856,7 +1821,7 @@ export async function notifyTreaters(submissionId: string) {
       const prefs = treater.notificationPreferences as any;
       // Default teams to true if undefined
       if (prefs?.channels?.teams !== false) {
-        notifier.send({
+        queueTeams({
           to: treater.finca_email!,
           subject: `Action Required: "${submission.formName}" is ready for treatment`,
           message: `A form submission (${submission.formName}) has been fully signed and is now ready for processing by your unit. Submitted by: ${submitterName}. Reference: ${submission.reference ?? "N/A"}.`,
@@ -1864,8 +1829,7 @@ export async function notifyTreaters(submissionId: string) {
         });
       }
 
-      mailer.sendMail({
-        from: `FINCALite <${process.env.SMTP_FROM ?? process.env.SMTP_USER ?? "noreply@paperless.ng"}>`,
+      queueEmail({
         to: treater.finca_email!,
         subject: `Action Required: "${submission.formName}" is ready for treatment`,
         html: `
@@ -1887,9 +1851,7 @@ export async function notifyTreaters(submissionId: string) {
             <p style="font-size: 12px; color: #9ca3af; margin-top: 24px;">If you believe this was sent in error, please contact your administrator.</p>
           </div>
         `,
-      }).then(() => {
-        console.info(`[notifyTreaters] Treatment notification email successfully sent to ${treater.finca_email}`);
-      }).catch((e: any) => console.error("[notify treaters email error]", e));
+      });
     }
   } catch (err) {
     console.error("[notifyTreaters] error:", err);

@@ -2,8 +2,7 @@ import { Router } from "express";
 import multer from "multer";
 import prisma from "../lib/prisma";
 import { storeDocumentLocally } from "../lib/storage";
-import { mailer } from "../lib/mailer";
-import { notifier } from "../lib/notifier";
+import { queueNotification } from "../lib/notificationService";
 import { logger } from "../lib/logger";
 import { isSharePointEnabled, downloadFromSharePoint } from "../lib/sharepoint";
 
@@ -274,18 +273,12 @@ bugsRouter.post("/", memUpload.array("files", 5), async (req, res, next) => {
 
     for (const email of adminEmails) {
       // Email notification
-      mailer.sendMail({
-        to: email,
-        subject,
-        html: htmlBody,
-      }).catch((err) => logger.error(`Bug email notification failed for ${email}: ${err}`));
-
-      // Teams notification
-      notifier.notifyInternalUser({
+      queueNotification({
         to: email,
         subject,
         message: `${posterName} submitted a ${reportType.toLowerCase()}: "${title}"`,
-      }).catch((err) => logger.error(`Bug Teams notification failed for ${email}: ${err}`));
+        html: htmlBody,
+      });
     }
 
     // Return the created bug with its attachments
@@ -442,17 +435,12 @@ bugsRouter.put("/:id/fix", async (req, res, next) => {
       `;
 
       for (const email of emailsToNotify) {
-        mailer.sendMail({
-          to: email,
-          subject,
-          html: htmlBody,
-        }).catch((err) => logger.error(`Fix notification email failed for ${email}: ${err}`));
-
-        notifier.notifyInternalUser({
+        queueNotification({
           to: email,
           subject,
           message: `${bug.type === "feature" ? "Feature request" : "Bug report"} "${bug.title}" has been resolved.${fixComment ? ` Notes: ${fixComment}` : ""}`,
-        }).catch((err) => logger.error(`Fix Teams notification failed for ${email}: ${err}`));
+          html: htmlBody,
+        });
       }
     }
 

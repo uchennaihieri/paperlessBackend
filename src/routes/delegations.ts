@@ -1,7 +1,7 @@
 import { Router, Response } from "express";
 import { PrismaClient } from "@prisma/client";
 import { authenticate, AuthRequest } from "../middleware/authenticate";
-import { mailer } from "../lib/mailer";
+import { queueEmail } from "../lib/notificationService";
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -111,8 +111,7 @@ router.post("/", async (req: AuthRequest, res: Response) => {
 
     // Notify delegatee
     if (delegateUser.finca_email) {
-      await mailer.sendMail({
-        from: process.env.SMTP_FROM || "no-reply@finca.com",
+      await queueEmail({
         to: delegateUser.finca_email,
         subject: `Delegation Request from ${originalUser.user_name}`,
         html: `
@@ -121,7 +120,7 @@ router.post("/", async (req: AuthRequest, res: Response) => {
           <p><strong>${originalUser.user_name}</strong> has requested to delegate their workflow forms to you.</p>
           <p>Please log in to your dashboard to Approve or Decline this request.</p>
         `
-      }).catch(console.error);
+      });
     }
 
     res.status(201).json({ success: true, data: delegation });
@@ -174,8 +173,7 @@ router.post("/:id/decline", async (req: AuthRequest, res: Response) => {
     });
 
     if (delegation.originalUser.finca_email) {
-      await mailer.sendMail({
-        from: process.env.SMTP_FROM || "no-reply@finca.com",
+      await queueEmail({
         to: delegation.originalUser.finca_email,
         subject: `Delegation Request Declined`,
         html: `
@@ -184,7 +182,7 @@ router.post("/:id/decline", async (req: AuthRequest, res: Response) => {
           <p><strong>${delegation.delegateUser.user_name}</strong> has declined your workflow delegation request.</p>
           <p>Please log in to select a different delegate.</p>
         `
-      }).catch(console.error);
+      });
     }
 
     res.json({ success: true, data: updated });

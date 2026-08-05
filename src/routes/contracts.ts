@@ -5,7 +5,7 @@ import { isSharePointEnabled } from "../lib/sharepoint";
 import { storeDocumentLocally } from "../lib/storage";
 import { generateContractPdf, getContractPreviewHtml } from "../lib/pdfGenerator";
 import { checkAndUnblockPrerequisites } from "./workflow";
-import { mailer } from "../lib/mailer";
+import { queueEmail } from "../lib/notificationService";
 import crypto from "crypto";
 import { hashToken, decrypt } from "../lib/crypto";
 
@@ -140,8 +140,7 @@ router.post("/external-sign/:token", async (req: Request, res: Response) => {
 
     // Email external party a copy of the contract
     if (contract.externalSignerEmail) {
-       await mailer.sendMail({
-         from: `FINCALite <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
+       await queueEmail({
          to: contract.externalSignerEmail,
          subject: "Your Signed Contract Copy",
          html: `
@@ -155,7 +154,7 @@ router.post("/external-sign/:token", async (req: Request, res: Response) => {
             filename: pdfResult.filename,
             content: pdfResult.buffer,
          }]
-       }).catch((e: any) => console.error("[contract copy email]", e));
+       });
     }
 
     res.json({ success: true, message: "Contract signed successfully." });
@@ -409,8 +408,7 @@ router.post("/:id/send-external", async (req: AuthRequest, res: Response) => {
     const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
     const signUrl = `${appUrl}/sign-contract?token=${token}`;
 
-    await mailer.sendMail({
-      from: `FINCALite <${process.env.SMTP_FROM ?? "noreply@paperless.ng"}>`,
+    await queueEmail({
       to: externalSignerEmail,
       subject: `Action Required: Signature Requested for ${contract.submission.formName}`,
       html: `

@@ -3,7 +3,7 @@ import prisma from "../lib/prisma";
 import crypto from "crypto";
 import { authenticate, AuthRequest } from "../middleware/authenticate";
 import { logger } from "../lib/logger";
-import { mailer } from "../lib/mailer";
+import { queueEmail } from "../lib/notificationService";
 
 const router = Router();
 router.use(authenticate as any);
@@ -60,13 +60,10 @@ router.post("/", async (req: AuthRequest, res: Response) => {
         <p>Thank you.</p>
       `;
 
-      await mailer.sendMail({
-        from: `FINCALite <${process.env.SMTP_FROM || process.env.SMTP_USER}>`,
+      await queueEmail({
         to: r.targetEmail,
         subject: `Form Request: ${batch.template.name}`,
         html: emailBody
-      }).catch(err => {
-        logger.error(`Failed to send request email to ${r.targetEmail}:`, err);
       });
       
       logger.info(`[FormRequest] Sent email to ${r.targetEmail} for form ${batch.template.name}`);
@@ -190,13 +187,10 @@ router.post("/:id/remind", async (req: AuthRequest, res: Response) => {
       <p>Thank you.</p>
     `;
 
-    await mailer.sendMail({
-      from: `FINCALite <${process.env.SMTP_FROM || process.env.SMTP_USER}>`,
+    await queueEmail({
       to: request.targetEmail,
       subject: `Reminder: Form Request for ${request.batch.template.name}`,
       html: emailBody
-    }).catch(err => {
-      logger.error(`Failed to send reminder email to ${request.targetEmail}:`, err);
     });
 
     logger.info(`[FormRequest Reminder] Sent reminder email to ${request.targetEmail}`);
