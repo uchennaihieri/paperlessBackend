@@ -25,6 +25,21 @@ router.post("/", async (req: Request, res: Response) => {
     return;
   }
 
+  // Check if an OTP was recently sent (cooldown)
+  const existingToken = await prisma.verificationToken.findFirst({ where: { email } });
+  if (existingToken) {
+    const createdTime = existingToken.expires.getTime() - 10 * 60 * 1000;
+    const cooldownEnd = createdTime + 4 * 60 * 1000;
+    if (Date.now() < cooldownEnd) {
+      res.status(429).json({
+        success: false,
+        error: "An OTP was recently sent. Please wait before requesting another.",
+        code: "OTP_COOLDOWN"
+      });
+      return;
+    }
+  }
+
   const otp = crypto.randomInt(100000, 999999).toString();
   const expires = new Date();
   expires.setMinutes(expires.getMinutes() + 10);

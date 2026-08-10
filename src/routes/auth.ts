@@ -61,6 +61,29 @@ router.post("/login", async (req: Request, res: Response) => {
 
   // ── Send OTP ──────────────────────────────────────────────────────────────
   const email = user.finca_email!;
+
+  // Mask email
+  const [localPart, domain] = email.split('@');
+  const maskedLocal = localPart.charAt(0) + '*'.repeat(localPart.length - 1);
+  const maskedEmail = `${maskedLocal}@${domain}`;
+
+  // Check if an OTP was recently sent (cooldown)
+  const existingToken = await prisma.verificationToken.findFirst({ where: { email } });
+  if (existingToken) {
+    const createdTime = existingToken.expires.getTime() - 10 * 60 * 1000;
+    const cooldownEnd = createdTime + 4 * 60 * 1000;
+    if (Date.now() < cooldownEnd) {
+      res.status(429).json({
+        success: false,
+        error: "An OTP was recently sent. Please wait before requesting another.",
+        code: "OTP_COOLDOWN",
+        email: maskedEmail,
+        mustResetPassword: user.mustResetPassword
+      });
+      return;
+    }
+  }
+
   const otp = crypto.randomInt(100000, 999999).toString();
   const expires = new Date();
   expires.setMinutes(expires.getMinutes() + 10);
@@ -92,11 +115,6 @@ router.post("/login", async (req: Request, res: Response) => {
     res.status(500).json({ success: false, error: "Failed to send OTP. Please try again.", code: "FAILED_TO_SEND_OTP_PLEASE_TRY" });
     return;
   }
-
-  // Mask email
-  const [localPart, domain] = email.split('@');
-  const maskedLocal = localPart.charAt(0) + '*'.repeat(localPart.length - 1);
-  const maskedEmail = `${maskedLocal}@${domain}`;
 
   res.json({
     success: true,
@@ -170,6 +188,28 @@ router.post("/forgot-password", async (req: Request, res: Response) => {
 
   // ── Send OTP ──────────────────────────────────────────────────────────────
   const email = user.finca_email;
+
+  // Mask email
+  const [localPart, domain] = email.split('@');
+  const maskedLocal = localPart.charAt(0) + '*'.repeat(localPart.length - 1);
+  const maskedEmail = `${maskedLocal}@${domain}`;
+
+  // Check if an OTP was recently sent (cooldown)
+  const existingToken = await prisma.verificationToken.findFirst({ where: { email } });
+  if (existingToken) {
+    const createdTime = existingToken.expires.getTime() - 10 * 60 * 1000;
+    const cooldownEnd = createdTime + 4 * 60 * 1000;
+    if (Date.now() < cooldownEnd) {
+      res.status(429).json({
+        success: false,
+        error: "An OTP was recently sent. Please wait before requesting another.",
+        code: "OTP_COOLDOWN",
+        email: maskedEmail
+      });
+      return;
+    }
+  }
+
   const otp = crypto.randomInt(100000, 999999).toString();
   const expires = new Date();
   expires.setMinutes(expires.getMinutes() + 10);
@@ -201,11 +241,6 @@ router.post("/forgot-password", async (req: Request, res: Response) => {
     res.status(500).json({ success: false, error: "Failed to send OTP. Please try again.", code: "FAILED_TO_SEND_OTP_PLEASE_TRY" });
     return;
   }
-
-  // Mask email
-  const [localPart, domain] = email.split('@');
-  const maskedLocal = localPart.charAt(0) + '*'.repeat(localPart.length - 1);
-  const maskedEmail = `${maskedLocal}@${domain}`;
 
   res.json({
     success: true,
