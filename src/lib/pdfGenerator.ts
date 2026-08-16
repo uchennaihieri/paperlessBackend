@@ -350,9 +350,7 @@ export async function generateSubmissionPdf(id: string): Promise<{ buffer: Buffe
     }
   }
 
-  if (hasSignableDocument && submission.signatories) {
-    submission.signatories = submission.signatories.filter((s: any) => s.position === 1);
-  }
+  // Removed filter to allow all signatories to be rendered in standard generated documents
 
   if (pdfTemplateId) {
     const pdfTemplate = await prisma.pdfTemplate.findUnique({
@@ -931,4 +929,258 @@ export async function generateDraftDynamicContractPdf(templateId: string, formRe
   await browser.close();
 
   return { buffer: Buffer.from(pdfBuffer), filename: `Draft_${contractFieldName}.pdf` };
+}
+
+export interface SignatureTableInfo {
+  found: boolean;
+  rows: Array<{
+    pageIndex: number;
+    email: string;
+    signatureCellY: number;
+    signatureCellHeight: number;
+    signatureColX: number;
+    signatureColWidth: number;
+    dateColX?: number;
+  }>;
+}
+
+export async function detectSignatureTableInPdf(pdfBuffer: Buffer): Promise<SignatureTableInfo | null> {
+  console.log("[detectSignatureTableInPdf] Starting table detection...");
+  try {
+    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    
+    // Suppress noisy pdf.js font warnings in the terminal
+    const originalWarn = console.warn;
+    console.warn = (...args: any[]) => {
+      if (typeof args[0] === 'string' && (args[0].includes("TT: undefined function") || args[0].includes("standardFontDataUrl"))) {
+        return;
+      }
+      originalWarn(...args);
+    };
+
+    const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(pdfBuffer) });
+    const pdf = await loadingTask.promise;
+    
+    console.warn = originalWarn; // Restore original console.warn
+    
+    console.log(`[detectSignatureTableInPdf] Loaded PDF with ${pdf.numPages} pages.`);
+
+    const allRows: any[] = [];
+
+    let foundAnyTable = false;
+
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      const items = textContent.items as any[];
+      
+      const mailHeaders: any[] = [];
+      const sigHeaders: any[] = [];
+      const dateHeaders: any[] = [];
+
+      for (const item of items) {
+        if (!item.str) continue;
+        const text = item.str.toLowerCase();
+        if (text === "email" || text === "e-mail" || (text.includes("mail") && !text.includes("@"))) {
+          mailHeaders.push(item);
+        }
+        else if (text === "signature" || text === "sign" || text.includes("signature")) {
+          sigHeaders.push(item);
+        }
+        else if (text.includes("date")) {
+          dateHeaders.push(item);
+        }
+      }
+
+      // Group headers by Y-coordinate to form Tables
+      const tables: any[] = [];
+      for (const mHeader of mailHeaders) {
+        const mY = mHeader.transform[5];
+        // Find matching sig header
+        const sHeader = sigHeaders.find(s => Math.abs(s.transform[5] - mY) < 10);
+        if (sHeader) {
+          const dHeader = dateHeaders.find(d => Math.abs(d.transform[5] - mY) < 10);
+          tables.push({
+            headerY: mY,
+            mailColX: mHeader.transform[4],
+            sigColX: sHeader.transform[4],
+            sigColWidth: sHeader.width || 100,
+            dateColX: dHeader ? dHeader.transform[4] : undefined
+          });
+        }
+      }
+
+      // Sort tables from top to bottom (Y coordinate is bottom-up in PDF, so sort descending)
+      tables.sort((a, b) => b.headerY - a.headerY);
+
+      if (tables.length > 0) {
+        foundAnyTable = true;
+      }
+
+      for (let t = 0; t < tables.length; t++) {
+        const table = tables[t];
+        const topY = table.headerY - 5;
+        // The bottom bound is the next table's headerY, or 0 if it's the last table on the page
+        const bottomY = (t < tables.length - 1) ? tables[t + 1].headerY + 5 : 0;
+
+        // Find all email items for this table
+        const emailItemsOnPage = items.filter(it => {
+            if (!it.str || it.str.trim() === "") return false;
+            const ix = it.transform[4];
+            const iy = it.transform[5];
+            return iy <= topY && iy > bottomY && ix > table.mailColX - 250 && ix < table.sigColX - 10;
+        });
+
+        // Sort email items top to bottom (Y descending)
+        emailItemsOnPage.sort((a, b) => b.transform[5] - a.transform[5]);
+
+        // Group into continuous blocks if they are close vertically (handling wrapping)
+        const emailBlocks: any[][] = [];
+        let currentBlock: any[] = [];
+        for (const it of emailItemsOnPage) {
+            if (currentBlock.length === 0) {
+                currentBlock.push(it);
+            } else {
+                const prev = currentBlock[currentBlock.length - 1];
+                if (Math.abs(prev.transform[5] - it.transform[5]) < 15) {
+                    currentBlock.push(it);
+                } else {
+                    emailBlocks.push(currentBlock);
+                    currentBlock = [it];
+                }
+            }
+        }
+        if (currentBlock.length > 0) emailBlocks.push(currentBlock);
+
+        for (const block of emailBlocks) {
+            // Sort items in the block left-to-right (X ascending) to assemble correctly
+            block.sort((a, b) => a.transform[4] - b.transform[4]);
+            const assembledEmail = block.map(it => it.str).join("").replace(/\s/g, "");
+            
+            const emailMatch = assembledEmail.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/i);
+            if (emailMatch) {
+                // Determine signature cell Y based on the block's Y
+                const blockTopY = block[0].transform[5];
+                
+                // Check if there's a [SIGNED] watermark for this block
+                const signatureItemsNear = items.filter(it => {
+                     const ix = it.transform[4];
+                     const iy = it.transform[5];
+                     return Math.abs(iy - blockTopY) < 15 && Math.abs(ix - table.sigColX) < 50;
+                });
+                const hasSignedWatermark = signatureItemsNear.some(it => it.str === "[SIGNED]");
+                
+                if (hasSignedWatermark) {
+                    continue;
+                }
+
+                allRows.push({
+                    pageIndex: i - 1,
+                    email: emailMatch[1],
+                    signatureCellY: blockTopY,
+                    signatureCellHeight: 40,
+                    signatureColX: table.sigColX,
+                    signatureColWidth: table.sigColWidth,
+                    dateColX: table.dateColX
+                });
+            }
+        }
+      }
+    }
+
+    if (foundAnyTable) {
+        console.log(`[detectSignatureTableInPdf] Finished detection. Found table structure. Extracted ${allRows.length} UN-SIGNED rows across all pages.`);
+        return {
+          found: true,
+          rows: allRows
+        };
+    }
+  } catch (err) {
+    console.error("[detectSignatureTableInPdf] Error detecting signature table:", err);
+  }
+  console.log("[detectSignatureTableInPdf] Table not found.");
+  return null;
+}
+
+export async function burnSignatureIntoPdf(
+  pdfBuffer: Buffer,
+  signatureBase64: string,
+  tableInfo: SignatureTableInfo,
+  signerEmail: string
+): Promise<Buffer | null> {
+  console.log(`[burnSignatureIntoPdf] Attempting to burn signature for ${signerEmail}`);
+  
+  const targetRows = tableInfo.rows.filter(r => r.email.toLowerCase().includes(signerEmail.trim().toLowerCase()));
+  if (targetRows.length === 0) {
+    console.log(`[burnSignatureIntoPdf] Target row for ${signerEmail} NOT FOUND in table!`);
+    return null;
+  }
+  
+  console.log(`[burnSignatureIntoPdf] Found ${targetRows.length} matches for ${signerEmail}`);
+
+  const { PDFDocument, rgb, StandardFonts } = require("pdf-lib");
+  const pdfDoc = await PDFDocument.load(pdfBuffer);
+  const pages = pdfDoc.getPages();
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+
+  const b64Data = signatureBase64.includes(",") ? signatureBase64.split(",")[1] : signatureBase64;
+  const imgBytes = Buffer.from(b64Data, "base64");
+  
+  let pdfImage;
+  if (signatureBase64.includes("image/jpeg") || signatureBase64.includes("image/jpg")) {
+    pdfImage = await pdfDoc.embedJpg(imgBytes);
+  } else {
+    pdfImage = await pdfDoc.embedPng(imgBytes);
+  }
+
+  const imgDims = pdfImage.scale(1);
+
+  let burntCount = 0;
+  for (const targetRow of targetRows) {
+    const page = pages[targetRow.pageIndex];
+    if (!page) continue;
+
+    const maxWidth = Math.min(targetRow.signatureColWidth - 5, 80);
+    const maxHeight = 25; // Restore to 25 to keep signatures readable
+    
+    let scale = Math.min(maxWidth / imgDims.width, maxHeight / imgDims.height);
+
+    page.drawImage(pdfImage, {
+      x: targetRow.signatureColX + 2,
+      y: targetRow.signatureCellY - 10,
+      width: imgDims.width * scale,
+      height: imgDims.height * scale,
+    });
+
+    // Draw the invisible [SIGNED] watermark
+    page.drawText("[SIGNED]", {
+      x: targetRow.signatureColX + 2,
+      y: targetRow.signatureCellY,
+      size: 1,
+      color: rgb(1, 1, 1),
+      opacity: 0,
+    });
+    
+    // Draw Date if column exists
+    if (targetRow.dateColX !== undefined) {
+      const d = new Date();
+      const pad = (n: number) => n.toString().padStart(2, "0");
+      const formattedDate = `${pad(d.getDate())}-${pad(d.getMonth() + 1)}-${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+
+      page.drawText(formattedDate, {
+        x: targetRow.dateColX + 2,
+        y: targetRow.signatureCellY,
+        size: 10,
+        font: font,
+        color: rgb(0, 0, 0),
+      });
+    }
+    
+    burntCount++;
+  }
+
+  if (burntCount === 0) return null;
+
+  const modifiedBytes = await pdfDoc.save();
+  return Buffer.from(modifiedBytes);
 }

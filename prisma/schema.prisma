@@ -192,6 +192,7 @@ model SubmissionDocument {
   syncedAt       DateTime?
   mimeType       String         @default("application/octet-stream")
   size           Int            @default(0)
+  hasSignatureTable Boolean     @default(false)
   uploadedAt     DateTime       @default(now())
   submission     FormSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
 
@@ -689,4 +690,14 @@ model NotificationQueue {
 
   @@index([status, attempts])
   @@map("notification_queue")
+}
+
+model ESaveAdminScope {
+  id        String   @id @default(cuid())
+  phone     String   @unique
+  scopes    Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("esave_admin_scopes")
 }

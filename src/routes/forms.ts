@@ -546,7 +546,18 @@ router.post("/draft-pdf", async (req: AuthRequest, res: Response) => {
       }
     });
 
-    res.json({ success: true, tempPdfId: pdfTemp.id, data: { id: pdfTemp.id } });
+    let hasSignatureTable = false;
+    try {
+      const { detectSignatureTableInPdf } = require("../lib/pdfGenerator");
+      const tableInfo = await detectSignatureTableInPdf(pdfResult.buffer);
+      if (tableInfo && tableInfo.found) {
+        hasSignatureTable = true;
+      }
+    } catch (err) {
+      console.error("Error detecting signature table in draft:", err);
+    }
+
+    res.json({ success: true, tempPdfId: pdfTemp.id, data: { id: pdfTemp.id, hasSignatureTable } });
   } catch (error: any) {
     console.error("Error generating draft PDF:", error);
     res.status(500).json({ success: false, error: error.message });
@@ -558,6 +569,9 @@ router.post("/draft-pdf", async (req: AuthRequest, res: Response) => {
 import multer from "multer";
 const draftUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
+import path from "path";
+import { convertExcelToPdf } from "../lib/excelToPdf";
+
 router.post("/draft-pdf/upload", draftUpload.single("file"), async (req: AuthRequest, res: Response) => {
   const file = (req as any).file as Express.Multer.File | undefined;
   if (!file) {
@@ -566,10 +580,34 @@ router.post("/draft-pdf/upload", draftUpload.single("file"), async (req: AuthReq
   }
 
   try {
+    let pdfBuffer: Buffer;
+    const ext = path.extname(file.originalname).toLowerCase();
+
+    if (ext === ".xlsx" || ext === ".xls") {
+      pdfBuffer = await convertExcelToPdf(file.buffer);
+    } else if (ext === ".pdf") {
+      pdfBuffer = file.buffer;
+    } else {
+      res.status(400).json({ success: false, error: "Unsupported file type. Please upload a PDF or Excel file." });
+      return;
+    }
+
     const pdfTemp = await prisma.pdfTemp.create({
-      data: { pdfBuffer: file.buffer }
+      data: { pdfBuffer }
     });
-    res.json({ success: true, data: { id: pdfTemp.id } });
+
+    let hasSignatureTable = false;
+    try {
+      const { detectSignatureTableInPdf } = require("../lib/pdfGenerator");
+      const tableInfo = await detectSignatureTableInPdf(pdfBuffer);
+      if (tableInfo && tableInfo.found) {
+        hasSignatureTable = true;
+      }
+    } catch (err) {
+      console.error("Error detecting signature table in draft:", err);
+    }
+
+    res.json({ success: true, data: { id: pdfTemp.id, hasSignatureTable } });
   } catch (error: any) {
     console.error("Error storing uploaded PDF:", error);
     res.status(500).json({ success: false, error: error.message });

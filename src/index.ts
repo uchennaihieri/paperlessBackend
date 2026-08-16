@@ -53,6 +53,7 @@ import datasetsRouter from "./routes/datasets";
 import crmRouter from "./routes/crm";
 import foldersRouter from "./routes/folders";
 import bugsRouter from "./routes/bugs";
+import esaveScopesRouter from "./routes/esave-scopes";
 
 const app = express();
 const PORT = process.env.PORT ?? 4000;
@@ -134,6 +135,7 @@ v1.use("/form-requests", formRequestsRouter);
 v1.use("/delegations", delegationsRouter);
 v1.use("/datasets", datasetsRouter);
 v1.use("/bugs", bugsRouter);
+v1.use("/esave-scopes", esaveScopesRouter);
 
 app.use("/api/v1", v1);
 

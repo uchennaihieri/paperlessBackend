@@ -1088,57 +1088,96 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
     }
   }
 
-  if (hasSignableDocument && signableFieldLabel && Array.isArray(annotations) && annotations.length > 0) {
-    try {
-      const doc = await prisma.submissionDocument.findFirst({
-        where: { submissionId: req.params.id, fieldName: signableFieldLabel }
-      });
-      if (doc && doc.filePath) {
-        const { buffer } = await downloadFromSharePoint(doc.filePath);
-        const pdfDoc = await PDFDocument.load(buffer);
-        const pages = pdfDoc.getPages();
+  if (hasSignableDocument && signableFieldLabel) {
+    if (Array.isArray(annotations) && annotations.length > 0) {
+      try {
+        const doc = await prisma.submissionDocument.findFirst({
+          where: { submissionId: req.params.id, fieldName: signableFieldLabel }
+        });
+        if (doc && doc.filePath) {
+          const { buffer } = await downloadFromSharePoint(doc.filePath);
+          const pdfDoc = await PDFDocument.load(buffer);
+          const pages = pdfDoc.getPages();
 
-        for (const ann of annotations) {
-          // annotations expected: { type: 'text'|'signature', page: 1, x: number, y: number, value: string }
-          // y is assumed to be top-left origin (CSS-like) in points.
-          const page = pages[ann.page - 1];
-          if (!page) continue;
+          for (const ann of annotations) {
+            // annotations expected: { type: 'text'|'signature', page: 1, x: number, y: number, value: string }
+            // y is assumed to be top-left origin (CSS-like) in points.
+            const page = pages[ann.page - 1];
+            if (!page) continue;
 
-          const pdfHeight = page.getHeight();
-          
-          if (ann.type === "text" && ann.value) {
-            const size = ann.fontSize || 14;
-            page.drawText(ann.value, {
-              x: ann.x,
-              y: pdfHeight - ann.y - size, // Convert top-left to bottom-left
-              size: size,
-              color: rgb(0, 0, 0)
-            });
-          } else if (ann.type === "signature" && ann.value) {
-            const isJpg = ann.value.startsWith("data:image/jpeg") || ann.value.startsWith("data:image/jpg");
-            const b64 = ann.value.replace(/^data:image\/(png|jpeg|jpg);base64,/, "");
-            const imgBytes = Buffer.from(b64, "base64");
-            const image = isJpg ? await pdfDoc.embedJpg(imgBytes) : await pdfDoc.embedPng(imgBytes);
+            const pdfHeight = page.getHeight();
             
-            const targetWidth = ann.width || 150;
-            const targetHeight = ann.height || 50;
+            if (ann.type === "text" && ann.value) {
+              const size = ann.fontSize || 14;
+              page.drawText(ann.value, {
+                x: ann.x,
+                y: pdfHeight - ann.y - size, // Convert top-left to bottom-left
+                size: size,
+                color: rgb(0, 0, 0)
+              });
+            } else if (ann.type === "signature" && ann.value) {
+              const isJpg = ann.value.startsWith("data:image/jpeg") || ann.value.startsWith("data:image/jpg");
+              const b64 = ann.value.replace(/^data:image\/(png|jpeg|jpg);base64,/, "");
+              const imgBytes = Buffer.from(b64, "base64");
+              const image = isJpg ? await pdfDoc.embedJpg(imgBytes) : await pdfDoc.embedPng(imgBytes);
+              
+              const targetWidth = ann.width || 150;
+              const targetHeight = ann.height || 50;
 
-            page.drawImage(image, {
-              x: ann.x,
-              y: pdfHeight - ann.y - targetHeight, // top-left to bottom-left
-              width: targetWidth,
-              height: targetHeight,
-            });
+              page.drawImage(image, {
+                x: ann.x,
+                y: pdfHeight - ann.y - targetHeight, // top-left to bottom-left
+                width: targetWidth,
+                height: targetHeight,
+              });
+            }
           }
-        }
 
-        const pdfBytes = await pdfDoc.save();
-        // Overwrite the file in SharePoint by passing doc.filePath as the fileName and "" as folder
-        await storeDocumentLocally(Buffer.from(pdfBytes), doc.filePath, doc.mimeType, "");
-        console.info(`[pdf] Burned annotations into Master PDF ${doc.filePath}`);
+          const pdfBytes = await pdfDoc.save();
+          // Overwrite the file in SharePoint by passing doc.filePath as the fileName and "" as folder
+          await storeDocumentLocally(Buffer.from(pdfBytes), doc.filePath, doc.mimeType, "");
+          console.info(`[pdf] Burned annotations into Master PDF ${doc.filePath}`);
+        }
+      } catch (e) {
+        console.error("[pdf] Failed to burn annotations into signable document:", e);
       }
-    } catch (e) {
-      console.error("[pdf] Failed to burn annotations into signable document:", e);
+    } else {
+      // ── New flow: auto-burn signature into table ──
+      try {
+        const doc = await prisma.submissionDocument.findFirst({
+          where: { submissionId: req.params.id, fieldName: signableFieldLabel }
+        });
+        console.log(`[workflow] Checking auto-burn for signableFieldLabel=${signableFieldLabel}, doc found: ${!!doc}`);
+        if (doc && doc.filePath && finalSignatureData) {
+          console.log(`[workflow] Doc has filePath: ${doc.filePath}. Downloading from SharePoint/Local...`);
+          const { buffer } = await downloadFromSharePoint(doc.filePath);
+          const { detectSignatureTableInPdf, burnSignatureIntoPdf } = await import("../lib/pdfGenerator");
+          
+          console.log(`[workflow] Running detectSignatureTableInPdf on buffer length ${buffer.length}...`);
+          const tableInfo = await detectSignatureTableInPdf(buffer);
+          
+          if (tableInfo && tableInfo.found) {
+            const signerEmail = sigRow.email;
+            console.log(`[workflow] Table found! Attempting to burn signature for email: ${signerEmail}`);
+            const updatedBuffer = await burnSignatureIntoPdf(
+              buffer, finalSignatureData, tableInfo, signerEmail
+            );
+            if (updatedBuffer) {
+              console.log(`[workflow] Burn successful! Storing document back to ${doc.filePath}`);
+              await storeDocumentLocally(updatedBuffer, doc.filePath, doc.mimeType, "");
+              console.info(`[pdf] Auto-burned signature for ${signerEmail} into ${doc.filePath}`);
+            } else {
+              console.warn(`[pdf] Signer email ${signerEmail} not found in signature table of ${doc.filePath}. Skipping burn.`);
+            }
+          } else {
+            console.log(`[workflow] Table NOT found in document ${doc.filePath}`);
+          }
+        } else {
+          console.log(`[workflow] Auto-burn skipped. Doc=${!!doc}, filePath=${doc?.filePath}, finalSignatureData=${!!finalSignatureData}`);
+        }
+      } catch (e) {
+        console.error("[pdf] Failed to auto-burn signature into signable document:", e);
+      }
     }
   }
 

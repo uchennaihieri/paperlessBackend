@@ -781,9 +781,30 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
       
       if (pdfTemp) {
         let finalBuffer = pdfTemp.pdfBuffer;
+        
+        const { detectSignatureTableInPdf, burnSignatureIntoPdf } = require('../lib/pdfGenerator');
+        
+        console.log(`[submissions] Uploading tempPdfId: ${tempPdfId}. Running detectSignatureTableInPdf...`);
+        const tableInfo = await detectSignatureTableInPdf(finalBuffer);
 
-        // Apply annotations using pdf-lib if provided
-        if (Array.isArray(initiatorAnnotations) && initiatorAnnotations.length > 0) {
+        if (tableInfo && tableInfo.found && initiatorSignature) {
+          console.log(`[submissions] Table found. Initiator signature present. Attempting to burn for ${req.user?.email}`);
+          // Auto-burn the initiator's signature if there's a signature table
+          const burnedBuffer = await burnSignatureIntoPdf(
+            finalBuffer,
+            initiatorSignature,
+            tableInfo,
+            req.user?.email || ""
+          );
+          if (burnedBuffer) {
+            console.log(`[submissions] Initiator signature burned successfully.`);
+            finalBuffer = burnedBuffer;
+          } else {
+            console.warn(`[submissions] Initiator signature burn failed (returned null).`);
+          }
+        } else if (Array.isArray(initiatorAnnotations) && initiatorAnnotations.length > 0) {
+          console.log(`[submissions] No table found or no initiatorSignature. Falling back to manual annotations.`);
+          // Otherwise, apply manual annotations using pdf-lib if provided
           const { PDFDocument } = require('pdf-lib');
           const pdfDoc = await PDFDocument.load(finalBuffer);
           const pages = pdfDoc.getPages();
@@ -832,7 +853,15 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
         // Which field is it?
         const contractFieldLabel = signableDocumentFieldLabel || (generatedContractFields[0]?.label ?? "Contract");
         processedContractFields.add(contractFieldLabel);
-        const originalFilename = `Signed_${contractFieldLabel.replace(/[^a-zA-Z0-9]/g, "_")}.pdf`;
+        let originalFilename = `Signed_${contractFieldLabel.replace(/[^a-zA-Z0-9]/g, "_")}.pdf`;
+        
+        // The frontend sends the original file in the multipart uploadedFiles array.
+        // We'll extract its true original name from there before we skip its double-processing later!
+        const uploadedFile = uploadedFiles?.find(f => f.fieldname === contractFieldLabel);
+        if (uploadedFile && uploadedFile.originalname) {
+            const baseName = uploadedFile.originalname.replace(/\.[^/.]+$/, "");
+            originalFilename = `${baseName}.pdf`;
+        }
 
         const storedPath = await storeDocumentLocally(
             finalBuffer, originalFilename, "application/pdf", folder
@@ -846,6 +875,9 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
             size: finalBuffer.length,
         });
 
+        // Clear any frontend placeholder payload (like the original .xlsx name) so it doesn't duplicate
+        updatedResponses[contractFieldLabel] = [];
+        
         if (!internalAttachments[contractFieldLabel]) internalAttachments[contractFieldLabel] = [];
         internalAttachments[contractFieldLabel].push({ isAttachment: true, name: originalFilename, url: "__pending__" });
 
@@ -911,6 +943,12 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
     }
 
     for (const [fieldName, files] of Object.entries(byField)) {
+      // If this field was already processed as a signable document (e.g. converted to PDF),
+      // do not process its raw file upload again or it will overwrite our PDF payload!
+      if (processedContractFields.has(fieldName)) {
+        continue;
+      }
+
       const attachments: Array<{ isAttachment: true; name: string; url: string }> = [];
 
       for (const file of files) {
@@ -1408,8 +1446,56 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
     const fieldDocUrls: Record<string, string[]> = {};
 
     for (const doc of docCreates) {
+      let hasSignatureTable = false;
+      if (doc.mimeType === "application/pdf") {
+        try {
+          const fs = require("fs/promises");
+          const path = require("path");
+          const { detectSignatureTableInPdf } = require("../lib/pdfGenerator");
+          
+          const baseDir = process.env.LOCAL_UPLOAD_DIR || path.join(process.cwd(), "uploads");
+          const absolutePath = path.join(baseDir, doc.filePath);
+          
+          let buffer = await fs.readFile(absolutePath);
+          const tableInfo = await detectSignatureTableInPdf(buffer);
+          if (tableInfo && tableInfo.found) {
+            hasSignatureTable = true;
+            
+            if (finalSignatureData) {
+              const { burnSignatureIntoPdf } = require("../lib/pdfGenerator");
+              const userAny = req.user as any;
+              const possibleEmails = [userAny?.finca_email, req.user?.email, userAny?.login_id, req.user?.user_name].filter(Boolean) as string[];
+              let matchedEmail = "";
+              for (const row of tableInfo.rows) {
+                if (possibleEmails.some(pe => row.email.toLowerCase().includes(pe.toLowerCase()))) {
+                  matchedEmail = row.email;
+                  break;
+                }
+              }
+              
+              if (matchedEmail) {
+                const burnedBuffer = await burnSignatureIntoPdf(
+                  buffer,
+                  finalSignatureData,
+                  tableInfo,
+                  matchedEmail
+                );
+                if (burnedBuffer) {
+                  buffer = burnedBuffer;
+                  await fs.writeFile(absolutePath, buffer);
+                  console.info(`[pdf] Auto-burned initiator signature for ${matchedEmail} into uploaded file ${doc.filePath}`);
+                }
+              }
+            }
+          }
+        } catch (err) {
+          console.error("Error detecting signature table:", err);
+        }
+      }
+
       const created = await prisma.submissionDocument.create({
-        data: { submissionId: submission.id, ...doc },
+        // @ts-ignore - Prisma client needs to be regenerated by the user
+        data: { submissionId: submission.id, hasSignatureTable, ...doc },
       });
 
       if (!fieldDocUrls[doc.fieldName]) fieldDocUrls[doc.fieldName] = [];
