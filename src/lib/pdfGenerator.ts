@@ -1028,7 +1028,9 @@ export async function detectSignatureTableInPdf(pdfBuffer: Buffer): Promise<Sign
             if (!it.str || it.str.trim() === "") return false;
             const ix = it.transform[4];
             const iy = it.transform[5];
-            return iy <= topY && iy > bottomY && ix > table.mailColX - 250 && ix < table.sigColX - 10;
+            // We bound the email text X coordinate based on the Email header X (mailColX)
+            // rather than assuming the signature column is to its right.
+            return iy <= topY && iy > bottomY && ix > table.mailColX - 100 && ix < table.mailColX + 300;
         });
 
         // Sort email items top to bottom (Y descending)
