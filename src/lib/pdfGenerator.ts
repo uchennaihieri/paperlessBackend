@@ -960,7 +960,12 @@ export async function detectSignatureTableInPdf(pdfBuffer: Buffer): Promise<Sign
       originalWarn(...args);
     };
 
-    const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(pdfBuffer) });
+    const path = require("path");
+    const standardFontDataUrl = path.join(process.cwd(), "node_modules", "pdfjs-dist", "standard_fonts") + "/";
+    const loadingTask = pdfjsLib.getDocument({ 
+      data: new Uint8Array(pdfBuffer),
+      standardFontDataUrl: standardFontDataUrl
+    });
     const pdf = await loadingTask.promise;
     
     console.warn = originalWarn; // Restore original console.warn
