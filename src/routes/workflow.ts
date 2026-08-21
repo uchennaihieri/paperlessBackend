@@ -1181,6 +1181,21 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
     }
   }
 
+  // ── Auto-reburn missed signatures (self-healing) ────────────────────────────
+  if (hasSignableDocument) {
+    setImmediate(async () => {
+      try {
+        const { reburnMissedSignatures } = await import("../lib/pdfGenerator");
+        const reburnResult = await reburnMissedSignatures(req.params.id);
+        if (reburnResult.reburnedCount > 0) {
+          console.info(`[reburn] Auto-reburned ${reburnResult.reburnedCount} missed signature(s) for submission ${req.params.id}`);
+        }
+      } catch (e) {
+        console.error("[reburn] Auto-reburn failed:", e);
+      }
+    });
+  }
+
   // ── Respond immediately — signer should never wait for standard generation ─────
   res.json({ success: true });
 
@@ -1219,6 +1234,40 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
       // Important: check if THIS submission was a prerequisite for something else!
       checkAndUnblockPrerequisites(req.params.id);
     }
+  }
+});
+
+// ── POST /api/v1/workflow/:id/reburn-signatures ──────────────────────────────
+// Admin-only: Re-scan the signable document and burn any missed signatures.
+router.post("/:id/reburn-signatures", async (req: AuthRequest, res: Response) => {
+  const isSystemAdmin = req.user?.user_role?.toLowerCase() === "administrator" || req.user?.specialAccess?.toLowerCase().includes("administrator");
+  if (!isSystemAdmin) {
+    res.status(403).json({ success: false, error: "Forbidden: Administrators only", code: "FORBIDDEN_ADMINISTRATORS_ONLY" });
+    return;
+  }
+
+  try {
+    const { reburnMissedSignatures } = await import("../lib/pdfGenerator");
+    const result = await reburnMissedSignatures(req.params.id);
+
+    // Audit trail
+    if (result.reburnedCount > 0) {
+      const detailNote = result.details.map(d => `${d.email} (page ${d.pageIndex + 1})`).join(", ");
+      await logAudit({
+        submissionId: req.params.id,
+        prevStatus: "",
+        newStatus: "",
+        action: "reburn_signatures",
+        actorName: req.user?.user_name ?? req.user?.email ?? "Administrator",
+        actorEmail: req.user?.email ?? null,
+        note: `Reburned ${result.reburnedCount} missed signature(s): ${detailNote}`,
+      });
+    }
+
+    res.json({ success: true, reburnedCount: result.reburnedCount, details: result.details });
+  } catch (err) {
+    console.error("[reburn] Admin reburn failed:", err);
+    res.status(500).json({ success: false, error: "Failed to reburn signatures.", code: "REBURN_FAILED" });
   }
 });
 

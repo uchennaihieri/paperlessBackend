@@ -15,6 +15,7 @@ Handlebars.registerHelper("neq", function (a, b) {
 import prisma from "./prisma";
 import { PDFDocument, rgb } from "pdf-lib";
 import { downloadFromSharePoint } from "./sharepoint";
+import { storeDocumentLocally } from "./storage";
 import { decrypt } from "./crypto";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -952,7 +953,8 @@ export async function detectSignatureTableInPdf(pdfBuffer: Buffer): Promise<Sign
     // Suppress noisy pdf.js font warnings in the terminal
     const originalWarn = console.warn;
     console.warn = (...args: any[]) => {
-      if (typeof args[0] === 'string' && (args[0].includes("TT: undefined function") || args[0].includes("standardFontDataUrl"))) {
+      const msg = (args[0] && args[0].message) ? args[0].message : String(args[0]);
+      if (msg.includes("TT: undefined function") || msg.includes("standardFontDataUrl")) {
         return;
       }
       originalWarn(...args);
@@ -1044,7 +1046,7 @@ export async function detectSignatureTableInPdf(pdfBuffer: Buffer): Promise<Sign
                 currentBlock.push(it);
             } else {
                 const prev = currentBlock[currentBlock.length - 1];
-                if (Math.abs(prev.transform[5] - it.transform[5]) < 15) {
+                if (Math.abs(prev.transform[5] - it.transform[5]) < 20) {
                     currentBlock.push(it);
                 } else {
                     emailBlocks.push(currentBlock);
@@ -1185,4 +1187,118 @@ export async function burnSignatureIntoPdf(
 
   const modifiedBytes = await pdfDoc.save();
   return Buffer.from(modifiedBytes);
+}
+
+// ── Reburn Missed Signatures ──────────────────────────────────────────────────
+// Scans the PDF for unsigned rows, cross-references against already-signed
+// signatories in the database, and burns any missed signatures.
+export async function reburnMissedSignatures(
+  submissionId: string
+): Promise<{ reburnedCount: number; details: Array<{ email: string; pageIndex: number }> }> {
+  const result: { reburnedCount: number; details: Array<{ email: string; pageIndex: number }> } = {
+    reburnedCount: 0,
+    details: [],
+  };
+
+  try {
+    // 1. Find the submission and its template to locate the signable document field
+    const submission = await prisma.formSubmission.findUnique({
+      where: { id: submissionId },
+      include: {
+        template: { select: { fields: true } },
+        signatories: {
+          where: { status: "Signed", signatureData: { not: null } },
+          select: { email: true, signatureData: true },
+        },
+      },
+    });
+
+    if (!submission || !submission.template?.fields) {
+      console.log(`[reburn] Submission ${submissionId} not found or has no template fields.`);
+      return result;
+    }
+
+    if (!submission.signatories || submission.signatories.length === 0) {
+      console.log(`[reburn] No signed signatories with signatureData for submission ${submissionId}.`);
+      return result;
+    }
+
+    // 2. Find the signable_document or generated_contract field label
+    const fields = typeof submission.template.fields === "string"
+      ? JSON.parse(submission.template.fields)
+      : submission.template.fields;
+
+    let signableFieldLabel = "";
+    for (const f of fields) {
+      if (f.type === "signable_document" || f.type === "generated_contract") {
+        signableFieldLabel = f.label;
+        break;
+      }
+    }
+
+    if (!signableFieldLabel) {
+      console.log(`[reburn] No signable_document or generated_contract field found for submission ${submissionId}.`);
+      return result;
+    }
+
+    // 3. Get the document record
+    const doc = await prisma.submissionDocument.findFirst({
+      where: { submissionId, fieldName: signableFieldLabel },
+    });
+
+    if (!doc || !doc.filePath) {
+      console.log(`[reburn] No document found for field "${signableFieldLabel}" in submission ${submissionId}.`);
+      return result;
+    }
+
+    // 4. Iterate over signed signatories and burn any that are missing
+    // We must re-download and re-detect after each burn, because each burn
+    // adds a [SIGNED] watermark that affects subsequent detection.
+    for (const signer of submission.signatories) {
+      try {
+        const { buffer } = await downloadFromSharePoint(doc.filePath);
+        const tableInfo = await detectSignatureTableInPdf(buffer);
+
+        if (!tableInfo || !tableInfo.found || tableInfo.rows.length === 0) {
+          console.log(`[reburn] No unsigned rows remain in ${doc.filePath}. Stopping.`);
+          break;
+        }
+
+        // Check if this signer has an unsigned row in the PDF
+        const signerEmail = signer.email.trim().toLowerCase();
+        const matchingRow = tableInfo.rows.find(
+          r => r.email.toLowerCase().includes(signerEmail) || signerEmail.includes(r.email.toLowerCase())
+        );
+
+        if (!matchingRow) {
+          continue; // This signer's rows are already all burned
+        }
+
+        // Found a missed burn — apply it
+        console.log(`[reburn] Found missed burn for ${signer.email} on page ${matchingRow.pageIndex + 1}. Burning...`);
+        const updatedBuffer = await burnSignatureIntoPdf(
+          buffer, signer.signatureData!, tableInfo, signer.email
+        );
+
+        if (updatedBuffer) {
+          await storeDocumentLocally(updatedBuffer, doc.filePath, doc.mimeType, "");
+          result.reburnedCount++;
+          result.details.push({ email: signer.email, pageIndex: matchingRow.pageIndex });
+          console.info(`[reburn] Successfully reburned signature for ${signer.email} into ${doc.filePath}`);
+        }
+      } catch (innerErr) {
+        console.error(`[reburn] Error processing signer ${signer.email}:`, innerErr);
+      }
+    }
+
+    if (result.reburnedCount > 0) {
+      console.log(`[reburn] Completed. Reburned ${result.reburnedCount} missed signature(s) for submission ${submissionId}.`);
+    } else {
+      console.log(`[reburn] No missed burns found for submission ${submissionId}.`);
+    }
+  } catch (err) {
+    console.error(`[reburn] Failed to reburn missed signatures for submission ${submissionId}:`, err);
+  }
+
+  return result;
 }
