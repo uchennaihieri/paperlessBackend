@@ -147,6 +147,78 @@ export async function activatePrerequisite(prereqId: string, mainSubmissionId: s
   }
 }
 
+// ── Parent Workflow Closer Helper ──────────────────────────────────────────────
+export async function checkAndCloseParentWorkflow(childSubmissionId: string, childFinalStatus: string) {
+  setImmediate(async () => {
+    try {
+      const childSub = await prisma.formSubmission.findUnique({
+        where: { id: childSubmissionId },
+        select: { formResponses: true, template: { select: { fields: true } } },
+      });
+      if (!childSub) return;
+
+      let parentSubIdToClose: string | null = null;
+
+      // 1. Check if this is a prerequisite workflow
+      const prereqLink = await prisma.submissionPrerequisite.findFirst({
+        where: { prereqSubmissionId: childSubmissionId }
+      });
+
+      if (prereqLink) {
+        parentSubIdToClose = prereqLink.mainSubmissionId;
+      } else if (childSub.formResponses && childSub.template?.fields) {
+        // 2. Fallback to checking form reference fields
+        const fields: any[] = typeof childSub.template.fields === "string" 
+          ? JSON.parse(childSub.template.fields) 
+          : childSub.template.fields;
+
+        const refField = fields.find((f: any) => f.label?.toLowerCase().includes("form reference") || f.label?.toLowerCase() === "reference");
+        if (refField) {
+          const responses: any = typeof childSub.formResponses === "string" 
+            ? JSON.parse(childSub.formResponses) 
+            : childSub.formResponses;
+
+          const parentRef = responses[refField.id] || responses[refField.label];
+          if (parentRef && typeof parentRef === "string") {
+            const parentByRef = await prisma.formSubmission.findUnique({
+              where: { reference: parentRef },
+              select: { id: true, status: true, reference: true },
+            });
+            if (parentByRef) parentSubIdToClose = parentByRef.id;
+          }
+        }
+      }
+
+      if (!parentSubIdToClose) return;
+
+      const parentSub = await prisma.formSubmission.findUnique({
+        where: { id: parentSubIdToClose },
+        select: { id: true, status: true, reference: true },
+      });
+
+      if (parentSub && parentSub.status === "Awaiting Final Workflow") {
+        await prisma.formSubmission.update({
+          where: { id: parentSub.id },
+          data: { status: childFinalStatus },
+        });
+
+        await logAudit({
+          submissionId: parentSub.id,
+          formReference: parentSub.reference,
+          prevStatus: parentSub.status,
+          newStatus: childFinalStatus,
+          action: "auto-completed-by-child",
+          actorName: "System",
+          actorEmail: "system@paperless",
+          note: `Auto-${childFinalStatus.toLowerCase()} based on child workflow / prerequisite completion.`,
+        });
+      }
+    } catch (e) {
+      console.error("Error in checkAndCloseParentWorkflow:", e);
+    }
+  });
+}
+
 // ── Prerequisite Unblock Helper ──────────────────────────────────────────────
 export async function checkAndUnblockPrerequisites(completedSubmissionId?: string, prerequisiteId?: string) {
   setImmediate(async () => {
@@ -223,6 +295,7 @@ export async function checkAndUnblockPrerequisites(completedSubmissionId?: strin
 
         if (newStatus === "Completed") {
           notifySuccessfulCompletion(prereqLink.mainSubmissionId);
+          checkAndCloseParentWorkflow(prereqLink.mainSubmissionId, "Completed");
         } else if (newStatus === "Processing") {
           notifyTreaters(prereqLink.mainSubmissionId);
         }
@@ -502,6 +575,51 @@ router.get("/submissions/:id", async (req, res: Response) => {
   res.json({ success: true, data: sub });
 });
 
+// ── POST /api/v1/workflow/:id/awaiting-final-workflow ───────────────────────
+router.post("/:id/awaiting-final-workflow", async (req: AuthRequest, res: Response) => {
+  const userName = req.user?.user_name ?? req.user?.email ?? "Unknown";
+  
+  const current = await prisma.formSubmission.findUnique({
+    where: { id: req.params.id },
+    select: { status: true, reference: true },
+  });
+
+  if (!current) {
+    res.status(404).json({ success: false, error: "Submission not found.", code: "SUBMISSION_NOT_FOUND" });
+    return;
+  }
+
+  await prisma.formSubmission.update({
+    where: { id: req.params.id },
+    data: { status: "Awaiting Final Workflow" },
+  });
+
+  await logAudit({
+    submissionId: req.params.id,
+    formReference: current.reference,
+    prevStatus: current.status,
+    newStatus: "Awaiting Final Workflow",
+    action: "Set Awaiting Final Workflow",
+    actorName: userName,
+    actorEmail: req.user?.email ?? "Unknown",
+    note: "Admin selected Complete with Workflow",
+  });
+
+  // If a childId was provided, check if that child is ALREADY completed.
+  if (req.body?.childId) {
+    const child = await prisma.formSubmission.findUnique({
+      where: { id: req.body.childId },
+      select: { status: true }
+    });
+    if (child && (child.status === "Completed" || child.status === "Not Approved")) {
+      // The child is already complete (e.g. no treaters, no signers), so close the parent immediately.
+      checkAndCloseParentWorkflow(req.body.childId, child.status);
+    }
+  }
+
+  res.json({ success: true, newStatus: "Awaiting Final Workflow" });
+});
+
 // ── POST /api/v1/workflow/:id/assign-self ─────────────────────────────────────
 router.post("/:id/assign-self", async (req: AuthRequest, res: Response) => {
   const userName = req.user?.user_name ?? req.user?.email ?? "Unknown";
@@ -675,6 +793,8 @@ router.post("/:id/complete", async (req: AuthRequest, res: Response) => {
     });
     // Trigger successful completion email to submitter
     notifySuccessfulCompletion(req.params.id);
+    // Check if this form should close a parent form
+    checkAndCloseParentWorkflow(req.params.id, "Completed");
   } else {
     // Routing to a final approver
     await prisma.formSubmission.update({
@@ -771,6 +891,9 @@ router.post("/:id/approve", async (req: AuthRequest, res: Response) => {
 
   // Trigger successful completion email to submitter
   notifySuccessfulCompletion(req.params.id);
+
+  // Check if this form should close a parent form
+  checkAndCloseParentWorkflow(req.params.id, "Completed");
 
   // Commit all pending journal entries for this submission's reference
   if (currentForApprove?.reference) {
@@ -936,6 +1059,9 @@ router.post("/:id/disapprove-final", async (req: AuthRequest, res: Response) => 
     });
   }
 
+  // Check if this form should close a parent form
+  checkAndCloseParentWorkflow(req.params.id, "Not Approved");
+
   res.json({ success: true });
 });
 
@@ -1067,6 +1193,7 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response) => {
   // Trigger notifications based on new status
   if (newSignStatus === "Completed") {
     notifySuccessfulCompletion(req.params.id);
+    checkAndCloseParentWorkflow(req.params.id, "Completed");
   } else if (newSignStatus === "Processing") {
     notifyTreaters(req.params.id);
   } else if (newSignStatus === "In-review" && currentForSign?.signingType === "sequential") {

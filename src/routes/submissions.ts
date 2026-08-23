@@ -9,7 +9,7 @@ import { hashToken, decrypt } from "../lib/crypto";
 import { isSharePointEnabled, downloadFromSharePoint } from "../lib/sharepoint";
 import { storeDocumentLocally } from "../lib/storage";
 import { queueEmail } from "../lib/notificationService";
-import { checkAndUnblockPrerequisites, notifyActiveSignatories, notifySuccessfulCompletion, notifySubmitterOfSubmission, notifyTreaters } from "./workflow";
+import { checkAndUnblockPrerequisites, notifyActiveSignatories, notifySuccessfulCompletion, notifySubmitterOfSubmission, notifyTreaters, checkAndCloseParentWorkflow } from "./workflow";
 
 // Files are always buffered in memory; they go straight to SharePoint (or disk)
 // on submission — never stored in a temp location.
@@ -661,6 +661,10 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
   try {
     for (const field of templateFields) {
       if ((field as any).type !== "extended_service") continue;
+
+      // If a file was uploaded manually for this field, skip SharePoint resolution
+      if (uploadedFiles.some(f => f.fieldname === field.label)) continue;
+
       const service: string = (field as any).extendedService ?? "";
       const ref: string = (updatedResponses[field.label] ?? "").toString().trim();
       if (!ref) continue;
@@ -1261,6 +1265,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
           notifyActiveSignatories(submission.id);
         } else if (initialStatus === "Completed") {
           notifySuccessfulCompletion(submission.id);
+          checkAndCloseParentWorkflow(submission.id, "Completed");
         } else if (initialStatus === "Processing") {
           notifyTreaters(submission.id);
         }
@@ -1402,6 +1407,25 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
             `,
           });
 
+          // Replace the email with the Prerequisite Form Reference in the main form's responses
+          let responsesUpdated = false;
+          let resData = submission.formResponses as Record<string, any>;
+          if (typeof resData === "object" && resData !== null) {
+            const val = resData[field.id] ?? resData[field.label];
+            if (typeof val === "string" && val.trim() === targetEmail) {
+              resData[field.id] = prereqSub.reference;
+              resData[field.label] = prereqSub.reference;
+              responsesUpdated = true;
+            }
+          }
+          if (responsesUpdated) {
+            await prisma.formSubmission.update({
+              where: { id: submission.id },
+              data: { formResponses: resData }
+            });
+            submission.formResponses = resData;
+          }
+
         } else {
           // PENDING: Queue for later, do not create draft or send email yet
           await prisma.submissionPrerequisite.create({
@@ -1430,6 +1454,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
           notifyActiveSignatories(submission.id);
         } else if (initialStatus === "Completed") {
           notifySuccessfulCompletion(submission.id);
+          checkAndCloseParentWorkflow(submission.id, "Completed");
         } else if (initialStatus === "Processing") {
           notifyTreaters(submission.id);
         }

@@ -602,10 +602,17 @@ export async function getContractPreviewHtml(contractRequestId: string): Promise
   const htmlSource = fileData.buffer.toString("utf-8");
 
   const unified = await buildUnifiedContext(contract.submission, {});
+  const formFields = typeof contract.submission.template?.fields === "string" ? JSON.parse(contract.submission.template.fields) : contract.submission.template?.fields || [];
   // Resolve mapped fields
   for (const field of (pdfTemplate as any).fields || []) {
     if (!field.mappingPath) continue;
-    if (field.mappingPath === "FormInput") continue;
+    if (field.mappingPath === "FormInput") {
+      const rawResponses = typeof contract.submission.formResponses === "string" 
+        ? JSON.parse(contract.submission.formResponses) : contract.submission.formResponses;
+      const matchingField = formFields.find((f: any) => f.label === field.name);
+      unified[field.name] = matchingField ? (rawResponses[matchingField.id] ?? rawResponses[matchingField.label] ?? "") : (rawResponses[field.name] ?? "");
+      continue;
+    }
     unified[field.name] = resolveContextPath(field.mappingPath, unified);
   }
 
@@ -649,11 +656,18 @@ export async function generateContractPdf(contractRequestId: string, drawnSignat
 
   const globalTemplateMappings = (contract.submission.template as any)?.templateMappings || {};
   const unified = await buildUnifiedContext(contract.submission, {});
+  const formFields = typeof contract.submission.template?.fields === "string" ? JSON.parse(contract.submission.template.fields) : contract.submission.template?.fields || [];
   // Resolve mapped fields
   for (const field of (pdfTemplate as any).fields || []) {
     const mappingPath = globalTemplateMappings[field.name] || field.mappingPath;
     if (!mappingPath) continue;
-    if (mappingPath === "FormInput") continue;
+    if (mappingPath === "FormInput") {
+      const rawResponses = typeof contract.submission.formResponses === "string" 
+        ? JSON.parse(contract.submission.formResponses) : contract.submission.formResponses;
+      const matchingField = formFields.find((f: any) => f.label === field.name);
+      unified[field.name] = matchingField ? (rawResponses[matchingField.id] ?? rawResponses[matchingField.label] ?? "") : (rawResponses[field.name] ?? "");
+      continue;
+    }
     unified[field.name] = resolveContextPath(mappingPath, unified);
   }
 
@@ -732,7 +746,13 @@ export async function generateDynamicContractPdf(submissionId: string, templateI
   for (const field of (pdfTemplate as any).fields || []) {
     const mappingPath = fieldTemplateMappings[field.name] || field.mappingPath;
     if (!mappingPath) continue;
-    if (mappingPath === "FormInput") continue;
+    if (mappingPath === "FormInput") {
+      const rawResponses = typeof submission.formResponses === "string" 
+        ? JSON.parse(submission.formResponses) : submission.formResponses;
+      const matchingField = formFields.find((f: any) => f.label === field.name);
+      unified[field.name] = matchingField ? (rawResponses[matchingField.id] ?? rawResponses[matchingField.label] ?? "") : (rawResponses[field.name] ?? "");
+      continue;
+    }
     unified[field.name] = resolveContextPath(mappingPath, unified);
   }
 
@@ -852,7 +872,8 @@ export async function generateDraftSubmissionPdf(templateId: string, formRespons
   }
 }
 
-export async function generateDraftDynamicContractPdf(templateId: string, formResponses: any, user: any, contractFieldName: string): Promise<{ buffer: Buffer, filename: string } | null> {
+export async function generateDraftDynamicContractPdf(templateId: string, formResponses: any, user: any, contractFieldName: string, signatories: any[] = []): Promise<{ buffer: Buffer, filename: string } | null> {
+  console.log(`[generateDraftDynamicContractPdf] Received formResponses for ${contractFieldName}:`, JSON.stringify(formResponses, null, 2));
   const template = await prisma.formTemplate.findUnique({
     where: { id: templateId }
   });
@@ -903,7 +924,12 @@ export async function generateDraftDynamicContractPdf(templateId: string, formRe
     createdAt: new Date(),
     formResponses,
     submittedBy: user,
-    signatories: [],
+    signatories: signatories.map((s: any, idx: number) => ({
+      position: s.position || idx + 1,
+      userName: s.userName || `Signatory ${idx + 1}`,
+      email: s.email || `signatory${idx + 1}@example.com`,
+      status: "Pending"
+    })),
     template: template
   };
 
@@ -916,7 +942,13 @@ export async function generateDraftDynamicContractPdf(templateId: string, formRe
   for (const field of (pdfTemplate as any).fields || []) {
     const mappingPath = fieldTemplateMappings[field.name] || field.mappingPath;
     if (!mappingPath) continue;
-    if (mappingPath === "FormInput") continue;
+    if (mappingPath === "FormInput") {
+      const rawResponses = typeof mockSubmission.formResponses === "string" 
+        ? JSON.parse(mockSubmission.formResponses) : mockSubmission.formResponses;
+      const matchingField = formFields.find((f: any) => f.label === field.name);
+      unified[field.name] = matchingField ? (rawResponses[matchingField.id] ?? rawResponses[matchingField.label] ?? "") : (rawResponses[field.name] ?? "");
+      continue;
+    }
     unified[field.name] = resolveContextPath(mappingPath, unified);
   }
 

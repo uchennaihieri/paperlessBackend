@@ -518,7 +518,7 @@ router.post("/:id/copy", requireAdmin as any, async (req: AuthRequest, res: Resp
 import { generateDraftSubmissionPdf, generateDraftDynamicContractPdf } from "../lib/pdfGenerator";
 
 router.post("/draft-pdf", async (req: AuthRequest, res: Response) => {
-  const { formResponses, templateId, contractFieldName } = req.body;
+  const { formResponses, templateId, contractFieldName, signatories } = req.body;
   if (!templateId || !formResponses) {
     res.status(400).json({ success: false, error: "templateId and formResponses are required." });
     return;
@@ -529,7 +529,7 @@ router.post("/draft-pdf", async (req: AuthRequest, res: Response) => {
     
     if (contractFieldName) {
       // Generated Contract
-      pdfResult = await generateDraftDynamicContractPdf(templateId, formResponses, req.user, contractFieldName);
+      pdfResult = await generateDraftDynamicContractPdf(templateId, formResponses, req.user, contractFieldName, signatories);
     } else {
       // Signable Document (Standard PDF but signed)
       pdfResult = await generateDraftSubmissionPdf(templateId, formResponses, req.user);
