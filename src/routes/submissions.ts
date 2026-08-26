@@ -428,12 +428,43 @@ router.get("/by-reference/:ref", async (req, res: Response) => {
       template: true,
       submittedBy: { select: { user_name: true, finca_email: true, branch: true } },
       documents: true,
+      prerequisites: {
+        include: {
+          prereqSubmission: true
+        },
+        orderBy: { order: "asc" }
+      }
     },
   });
+  
   if (!submission) {
     res.status(404).json({ success: false, error: `No submission found with reference "${req.params.ref}"`, code: "NO_SUBMISSION_FOUND_WITH_REFER" });
     return;
   }
+
+  // Pre-process responses to include namespaced prerequisite responses
+  let mergedResponses: Record<string, any> = { ...(submission.formResponses as object) };
+  if (submission.prerequisites && submission.prerequisites.length > 0) {
+     let index = 1;
+     for (const prereq of submission.prerequisites) {
+        if (prereq.prereqSubmission && prereq.prereqSubmission.status === "Completed") {
+           const prereqData = prereq.prereqSubmission.formResponses as Record<string, any>;
+           
+           // Inject reference
+           mergedResponses[`prerequisite${index}.reference`] = prereq.prereqSubmission.reference;
+           
+           // Inject responses
+           for (const [key, value] of Object.entries(prereqData)) {
+              mergedResponses[`prerequisite${index}.${key}`] = value;
+           }
+           index++;
+        }
+     }
+  }
+  
+  submission.formResponses = mergedResponses;
+  (submission as any).prerequisites = undefined; // Clean up nested payload
+
   res.json({ success: true, data: submission });
 });
 
