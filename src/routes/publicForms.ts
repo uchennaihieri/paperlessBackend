@@ -21,7 +21,7 @@ function sanitiseFolder(s: string): string {
 
 const router = Router();
 
-async function buildPublicSignatories(template: any, submitterName: string, submitterEmail: string, submitterSignature: string | undefined, officerId?: number, noSign: boolean = false) {
+async function buildPublicSignatories(template: any, submitterName: string, submitterEmail: string, submitterSignature: string | undefined, formResponses: any = {}, officerId?: number, noSign: boolean = false) {
   let signatoriesData: any[] = [{
     position: 1,
     userName: submitterName,
@@ -58,36 +58,52 @@ async function buildPublicSignatories(template: any, submitterName: string, subm
     
     if (Array.isArray(autoSigs) && autoSigs.length > 0) {
       for (const sig of autoSigs) {
-        let targetBranch = sig.branch;
-        
-        if (targetBranch === "MY_BRANCH") {
-           // Fallback logic for Head Office (or non-branch)
-           if (initiatorBranch === "Head Office" || initiatorBranch === "HQ") {
-             targetBranch = sig.fallbackBranch || "HQ";
-           } else {
-             targetBranch = initiatorBranch;
-           }
-        } else if (targetBranch === "USER BRANCH") {
-           targetBranch = initiatorBranch;
-        } 
-        
-        const user = await prisma.user.findFirst({
-          where: {
-            status: { equals: "active", mode: "insensitive" },
-            branch: { equals: targetBranch, mode: "insensitive" },
-            OR: [
-              { user_role: { equals: sig.role, mode: "insensitive" } },
-              { specialAccess: { contains: sig.role, mode: "insensitive" } }
-            ]
+        if (sig.type === "dynamic") {
+          const sigName = formResponses[sig.nameFieldId] || "Unknown";
+          const sigEmail = formResponses[sig.emailFieldId];
+          
+          if (!sigEmail) {
+            continue;
           }
-        });
-        if (user) {
+
           signatoriesData.push({
             position: currentPosition++,
-            userName: user.user_name || "Unknown",
-            email: user.finca_email || "unknown@internal",
+            userName: sigName,
+            email: sigEmail,
             status: "Pending"
           });
+        } else {
+          let targetBranch = sig.branch;
+          
+          if (targetBranch === "MY_BRANCH") {
+             // Fallback logic for Head Office (or non-branch)
+             if (initiatorBranch === "Head Office" || initiatorBranch === "HQ") {
+               targetBranch = sig.fallbackBranch || "HQ";
+             } else {
+               targetBranch = initiatorBranch;
+             }
+          } else if (targetBranch === "USER BRANCH") {
+             targetBranch = initiatorBranch;
+          } 
+          
+          const user = await prisma.user.findFirst({
+            where: {
+              status: { equals: "active", mode: "insensitive" },
+              branch: { equals: targetBranch, mode: "insensitive" },
+              OR: [
+                { user_role: { equals: sig.role, mode: "insensitive" } },
+                { specialAccess: { contains: sig.role, mode: "insensitive" } }
+              ]
+            }
+          });
+          if (user) {
+            signatoriesData.push({
+              position: currentPosition++,
+              userName: user.user_name || "Unknown",
+              email: user.finca_email || "unknown@internal",
+              status: "Pending"
+            });
+          }
         }
       }
       initialStatus = signatoriesData.length > 1 ? "In-review" : "Submitted";
@@ -285,7 +301,7 @@ router.post("/submit/:slug", memUpload.any(), async (req: Request, res: Response
   }
 
   try {
-    let { signatoriesData, initialStatus } = await buildPublicSignatories(template, publicSubmitterName, publicSubmitterEmail, submitterSignature, (req as any).resolvedOfficerId, noSign);
+    let { signatoriesData, initialStatus } = await buildPublicSignatories(template, publicSubmitterName, publicSubmitterEmail, submitterSignature, updatedResponses, (req as any).resolvedOfficerId, noSign);
 
     // ── Evaluate Conditional Routing for Treater and Owner ─────────────────
     let resolvedTreaterBranch: string | null = null;
@@ -652,7 +668,7 @@ router.post("/submit-token/:token", memUpload.any(), async (req: Request, res: R
   }
 
   try {
-    const { signatoriesData, initialStatus } = await buildPublicSignatories(template, publicSubmitterName, request.targetEmail, submitterSignature);
+    const { signatoriesData, initialStatus } = await buildPublicSignatories(template, publicSubmitterName, request.targetEmail, submitterSignature, updatedResponses);
 
     const submission = await prisma.formSubmission.create({
       data: {

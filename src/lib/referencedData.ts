@@ -10,7 +10,6 @@ export async function extractReferencedData(
   for (const field of templateFields) {
     if (field.description) {
       const match = field.description.match(/View Referenced "(?:(MainForm|Prerequisite\.\d+)\.)?([^"]+)"/i);
-      console.log(`[extractReferencedData] Field: ${field.label}, Desc: ${field.description}, Match:`, match);
       if (match) {
         const targetType = match[1] || "MainForm"; // e.g. "MainForm" or "Prerequisite.1"
         const targetLabel = match[2];
@@ -47,16 +46,33 @@ export async function extractReferencedData(
           }
         }
         
-        console.log(`[extractReferencedData] targetFormResponses for ${targetLabel}:`, targetFormResponses?.[targetLabel]);
+        // Handle .email suffix for prerequisite fields
+        const isEmailRequest = targetLabel.endsWith(".email");
+        const baseTargetLabel = isEmailRequest ? targetLabel.slice(0, -6) : targetLabel;
 
-        // If we successfully found the value, inject it
-        if (targetFormResponses && targetFormResponses[targetLabel] !== undefined) {
-          referencedResponses[field.label] = targetFormResponses[targetLabel];
+        if (targetFormResponses && targetFormResponses[baseTargetLabel] !== undefined) {
+          if (isEmailRequest) {
+            const refCode = targetFormResponses[baseTargetLabel];
+            if (refCode && typeof refCode === "string") {
+              const prereqSub = await prismaClient.formSubmission.findFirst({
+                where: { reference: { equals: refCode.trim(), mode: "insensitive" } },
+                include: { submittedBy: true }
+              });
+              
+              if (prereqSub) {
+                const submitterEmail = prereqSub.submittedBy?.finca_email || prereqSub.publicSubmitterEmail;
+                if (submitterEmail) {
+                  referencedResponses[field.label] = submitterEmail;
+                }
+              }
+            }
+          } else {
+            referencedResponses[field.label] = targetFormResponses[baseTargetLabel];
+          }
         }
       }
     }
   }
 
-  console.log(`[extractReferencedData] Final referencedResponses:`, referencedResponses);
   return referencedResponses;
 }
