@@ -201,7 +201,7 @@ router.get("/action-items", async (req: AuthRequest, res: Response) => {
   } else if (requestedStatus === "All") {
     statusCondition = {
       OR: [
-        { status: { in: ["Processing", "Filed", "Awaiting Correction"] } },
+        { status: { in: ["Processing", "Filed", "Awaiting Correction", "Blocked - Awaiting Prerequisites"] } },
         { status: { startsWith: "Assigned" } },
       ],
     };
@@ -209,7 +209,7 @@ router.get("/action-items", async (req: AuthRequest, res: Response) => {
     // Default "Pending"
     statusCondition = {
       OR: [
-        { status: { in: ["Processing", "Filed"] } },
+        { status: { in: ["Processing", "Filed", "Blocked - Awaiting Prerequisites"] } },
         { status: { startsWith: "Assigned" } },
       ],
     };
@@ -248,6 +248,10 @@ router.get("/action-items", async (req: AuthRequest, res: Response) => {
         include: {
           folder: true
         }
+      },
+      prerequisites: {
+        include: { targetForm: true, prereqSubmission: { select: { reference: true } } },
+        orderBy: { order: "asc" }
       },
     },
     orderBy: { createdAt: "desc" },
