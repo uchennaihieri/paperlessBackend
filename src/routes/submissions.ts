@@ -51,7 +51,7 @@ router.get("/my", async (req: AuthRequest, res: Response) => {
   const submissions = await prisma.formSubmission.findMany({
     where: {
       submittedById: req.user.id,
-      status: { notIn: ["Internal Attachment", "Not Approved", "Deleted", "Completed"] }
+      status: { notIn: ["Internal Attachment", "Not Approved", "Deleted", "Completed", "Canceled"] }
     },
     orderBy: { createdAt: "desc" },
     include: {
@@ -1421,6 +1421,7 @@ router.post("/", memUpload.any(), async (req: AuthRequest, res: Response) => {
           const fillUrl = `${appUrl}/dashboard/forms/draft/${prereqSub.id}`;
           queueEmail({
             to: targetEmail,
+            pattern: "onToSign",
             subject: `Action Required: Please complete the "${targetTemplate.name}" form`,
             html: `
               <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
@@ -1654,6 +1655,7 @@ router.post("/:id/delegate", async (req: AuthRequest, res: Response) => {
   const submissionLink = `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/dashboard/forms/submissions/${submission.id}`;
   await queueEmail({
     to: targetUser.finca_email as string,
+    pattern: "onMyFormProcessing",
     subject: `Form Delegated: ${submission.formName}`,
     html: `
       <div style="font-family: sans-serif; color: #333;">
@@ -2269,6 +2271,7 @@ router.post("/:id/submit-correction", memUpload.any(), async (req: AuthRequest, 
           import("../lib/notificationService").then(({ queueEmail }) => {
              queueEmail({
                to: cleanEmail,
+               pattern: "onToSign",
                subject: `Action Required: Please complete the "${targetTemplate.name}" form`,
                html: `
                  <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">

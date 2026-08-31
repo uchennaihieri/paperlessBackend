@@ -121,6 +121,7 @@ export async function activatePrerequisite(prereqId: string, mainSubmissionId: s
     
     queueEmail({
       to: targetEmail,
+      pattern: "onToSign",
       subject: `Action Required: Please complete the "${targetTemplate.name}" form`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
@@ -823,6 +824,141 @@ router.post("/:id/complete", async (req: AuthRequest, res: Response) => {
   res.json({ success: true });
 });
 
+// ── POST /api/v1/workflow/:id/cancel ───────────────────────────────────────────
+// Submitter cancels the form if it is "In Review" or "Processing"
+router.post("/:id/cancel", async (req: AuthRequest, res: Response) => {
+  const email = req.user?.email ?? null;
+  if (!email) {
+    res.status(401).json({ success: false, error: "Not authenticated", code: "NOT_AUTHENTICATED" });
+    return;
+  }
+
+  const { reason } = req.body;
+  const signatureToken = req.body.token || req.body.signatureToken;
+  
+  if (!signatureToken) {
+    res.status(400).json({ success: false, error: "Signature token is required.", code: "SIGNATURE_TOKEN_REQUIRED" });
+    return;
+  }
+  if (!reason || reason.trim() === "") {
+    res.status(400).json({ success: false, error: "Cancellation reason is required.", code: "REASON_REQUIRED" });
+    return;
+  }
+
+  const user = await prisma.user.findFirst({
+    where: { finca_email: { equals: email, mode: "insensitive" } },
+  });
+  const secData = await prisma.securityData.findFirst({ where: { userEmail: { equals: email, mode: "insensitive" } } });
+
+  if (!user || !secData?.hashedToken) {
+    res.status(400).json({ success: false, error: "No signature token configured.", code: "NO_SIGNATURE_TOKEN" });
+    return;
+  }
+
+  const isValid = hashToken(signatureToken) === secData.hashedToken;
+  if (!isValid) {
+    res.status(400).json({ success: false, error: "Invalid signature token.", code: "INVALID_SIGNATURE_TOKEN" });
+    return;
+  }
+
+  const submission = await prisma.formSubmission.findUnique({
+    where: { id: req.params.id },
+    include: { submittedBy: { select: { finca_email: true, user_name: true } }, template: { select: { name: true, formTreater: true, formTreaterRole: true } } },
+  });
+
+  if (!submission) {
+    res.status(404).json({ success: false, error: "Submission not found", code: "NOT_FOUND" });
+    return;
+  }
+
+  if (submission.submittedBy?.finca_email?.toLowerCase() !== email.toLowerCase()) {
+    res.status(403).json({ success: false, error: "Only the submitter can cancel this request.", code: "NOT_SUBMITTER" });
+    return;
+  }
+
+  if (submission.status !== "In Review" && submission.status !== "Processing") {
+    res.status(400).json({ success: false, error: `Cannot cancel a submission that is ${submission.status}.`, code: "INVALID_STATUS" });
+    return;
+  }
+
+  const previousStatus = submission.status;
+
+  await prisma.formSubmission.update({
+    where: { id: submission.id },
+    data: { status: "Canceled" }
+  });
+
+  await logAudit({
+    submissionId: submission.id,
+    formReference: submission.reference,
+    prevStatus: previousStatus,
+    newStatus: "Canceled",
+    action: "canceled",
+    actorName: user.user_name,
+    actorEmail: email,
+    note: `Submission canceled by submitter. Reason: "${reason.trim()}"`,
+  });
+
+  // Notify Treaters if it was in Processing (resolve branch/role to actual user emails)
+  const treaterBranch = submission.template?.formTreater;
+  if (previousStatus === "Processing" && treaterBranch && treaterBranch.toLowerCase() !== "none") {
+    const treaterRole = submission.template?.formTreaterRole;
+    const treaterWhere: any = {
+      branch: { equals: treaterBranch, mode: "insensitive" },
+      finca_email: { not: null },
+    };
+    if (treaterRole && treaterRole.trim() !== "") {
+      treaterWhere.user_role = { equals: treaterRole, mode: "insensitive" };
+    }
+
+    const treaters = await prisma.user.findMany({
+      where: treaterWhere,
+      select: { user_name: true, finca_email: true },
+    });
+
+    const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
+    const viewUrl = `${appUrl}/dashboard/forms/submission/${submission.id}`;
+
+    for (const treater of treaters) {
+      if (!treater.finca_email) continue;
+      queueTeams({
+        to: treater.finca_email,
+        pattern: "onBusinessUnitTreat",
+        subject: `Form Canceled: ${submission.reference} - ${submission.template.name}`,
+        message: `A submission that was actively processing has been canceled by the submitter ${submission.submittedBy?.user_name || "Unknown"}. Reason: "${reason.trim()}"`,
+        link: viewUrl
+      });
+      queueEmail({
+        to: treater.finca_email,
+        pattern: "onBusinessUnitTreat",
+        subject: `Form Canceled: ${submission.reference} - ${submission.template.name}`,
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
+            <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
+            <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
+            <hr style="border-color: #e5e7eb; margin: 20px 0;" />
+            <p style="font-size: 15px; color: #111827;">Hi <strong>${treater.user_name ?? "there"}</strong>,</p>
+            <p style="font-size: 14px; color: #374151;">
+              A submission that was actively processing has been canceled by the submitter <strong>${submission.submittedBy?.user_name || "Unknown"}</strong>.
+            </p>
+            <div style="background: #f9fafb; border-left: 4px solid #ef4444; border-radius: 4px; padding: 16px; margin: 16px 0;">
+              <p style="margin: 0; font-weight: 600; color: #111827;">${submission.template.name}</p>
+              <p style="margin: 4px 0 0; font-size: 13px; color: #6b7280;">Reference: ${submission.reference}</p>
+              <p style="margin: 12px 0 0; font-size: 13px; color: #111827;"><strong>Cancellation Reason:</strong></p>
+              <p style="margin: 4px 0 0; font-size: 13px; color: #374151; font-style: italic;">"${reason.trim()}"</p>
+            </div>
+            <a href="${viewUrl}" style="display: inline-block; padding: 10px 20px; background-color: #B50938; color: white; text-decoration: none; border-radius: 6px; font-weight: 500; font-size: 14px; margin-top: 8px;">
+              View Historical Record
+            </a>
+          </div>
+        `
+      });
+    }
+  }
+
+  res.json({ success: true, message: "Submission canceled successfully." });
+});
+
 // ── POST /api/v1/workflow/:id/approve ─────────────────────────────────────────
 // Final approver signs off with their token and marks the submission as Completed
 router.post("/:id/approve", async (req: AuthRequest, res: Response) => {
@@ -1038,8 +1174,9 @@ router.post("/:id/disapprove-final", async (req: AuthRequest, res: Response) => 
     const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
     queueEmail({
       to: sub.submittedBy.finca_email,
+      pattern: "onDeclined",
       subject: `Submission Disapproved: "${sub.formName}"`,
-      html: `
+html: `
         <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
           <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
           <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
@@ -1544,8 +1681,9 @@ router.post("/:id/disapprove-signatory", async (req: AuthRequest, res: Response)
     const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
     queueEmail({
       to: currentForDecline.submittedBy.finca_email,
+      pattern: "onDeclined",
       subject: `Submission Disapproved: "${currentForDecline.formName}"`,
-      html: `
+html: `
         <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
           <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
           <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
@@ -1600,8 +1738,9 @@ router.post("/:id/remind/:signatoryId", async (req: AuthRequest, res: Response) 
 
   await queueEmail({
     to: signatory.email,
+    pattern: "onToSign",
     subject: `Reminder: Your signature is required on "${submission.formName}"`,
-    html: `
+html: `
       <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
         <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
         <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
@@ -1754,8 +1893,9 @@ export async function notifyActiveSignatories(submissionId: string, excludeEmail
 
       await queueNotification({
         to: signatory.email,
+        pattern: "onToSign",
         subject: `Action Required: "${submission.formName}" is ready for your signature`,
-        message: `A form requires your signature (${submission.formName}). Submitted by: ${submitterName}. Reference: ${submission.reference ?? "N/A"}.`,
+message: `A form requires your signature (${submission.formName}). Submitted by: ${submitterName}. Reference: ${submission.reference ?? "N/A"}.`,
         link: `${appUrl}/dashboard/workflow`,
         html: `
           <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
@@ -1806,8 +1946,9 @@ export async function notifyOfficerOfPersonalLink(submissionId: string, officerE
 
     await queueNotification({
       to: officerEmail,
+      pattern: "onMyFormSigned",
       subject: `Your Personal Link Has Been Filled: ${submission.formName}`,
-      message: `${message} Reference: ${submission.reference ?? "N/A"}`,
+message: `${message} Reference: ${submission.reference ?? "N/A"}`,
       link: actionUrl,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
@@ -1848,8 +1989,9 @@ export async function notifyFinalApprover(submissionId: string) {
 
     await queueNotification({
       to: submission.approverEmail,
+      pattern: "onFinalApprover",
       subject: `Action Required: Final Approval needed for "${submission.formName}"`,
-      message: `A submission (${submission.formName}) is pending your final approval. Submitted by: ${submitterName}. Reference: ${submission.reference ?? "N/A"}.`,
+message: `A submission (${submission.formName}) is pending your final approval. Submitted by: ${submitterName}. Reference: ${submission.reference ?? "N/A"}.`,
       link: `${appUrl}/dashboard/workflow`,
       html: `
           <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
@@ -1900,16 +2042,18 @@ export async function notifySuccessfulCompletion(submissionId: string) {
     if (submittedBy?.finca_email) {
       await queueTeams({
         to: emailTo as string,
+        pattern: "onCompleted",
         subject: `Submission Approved: "${submission.formName}"`,
-        message: `Your submission (${submission.formName}) has been successfully approved and completed! Reference: ${submission.reference ?? "N/A"}.`,
+message: `Your submission (${submission.formName}) has been successfully approved and completed! Reference: ${submission.reference ?? "N/A"}.`,
         link: buttonLink,
       });
     }
 
     await queueEmail({
       to: emailTo as string,
+      pattern: "onCompleted",
       subject: `Submission Approved: "${submission.formName}"`,
-      html: `
+html: `
           <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
             <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
             <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
@@ -1956,16 +2100,18 @@ export async function notifySubmitterOfSubmission(submissionId: string) {
     if (submittedBy?.finca_email) {
       await queueTeams({
         to: emailTo as string,
+        pattern: "onSubmitForm",
         subject: `Submission Confirmation: "${submission.formName}"`,
-        message: `We have successfully received your submission (${submission.formName}). Reference: ${submission.reference ?? "N/A"}.`,
+message: `We have successfully received your submission (${submission.formName}). Reference: ${submission.reference ?? "N/A"}.`,
         link: buttonLink,
       });
     }
 
     await queueEmail({
       to: emailTo as string,
+      pattern: "onSubmitForm",
       subject: `Submission Confirmation: "${submission.formName}"`,
-      html: `
+html: `
           <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
             <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
             <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
@@ -2021,33 +2167,29 @@ export async function notifyTreaters(submissionId: string) {
     const submitterName = submission.submittedBy?.user_name ?? "A colleague";
     const appUrl = process.env.APP_URL ?? "https://paperless.vercel.app";
 
-    const eligibleTreaters = treaters.filter((t) => {
-      if (!t.finca_email) return false;
-      const prefs = t.notificationPreferences as any;
-      if (!prefs?.patterns) return false; // default is false, so no prefs = no notification
-      return prefs.patterns.onBusinessUnitTreat === true;
-    });
+    const eligibleTreaters = treaters.filter((t) => !!t.finca_email);
 
     if (eligibleTreaters.length === 0) return;
 
     console.info(`[notifyTreaters] Sending treatment notification for submission ${submissionId} to: ${eligibleTreaters.map((t) => t.finca_email).join(", ")}`);
 
     for (const treater of eligibleTreaters) {
-      const prefs = treater.notificationPreferences as any;
-      // Default teams to true if undefined
-      if (prefs?.channels?.teams !== false) {
+      // Preference checks are handled centrally by queueTeams/queueEmail via the pattern param
+      {
         queueTeams({
           to: treater.finca_email!,
+          pattern: "onBusinessUnitTreat",
           subject: `Action Required: "${submission.formName}" is ready for treatment`,
-          message: `A form submission (${submission.formName}) has been fully signed and is now ready for processing by your unit. Submitted by: ${submitterName}. Reference: ${submission.reference ?? "N/A"}.`,
+message: `A form submission (${submission.formName}) has been fully signed and is now ready for processing by your unit. Submitted by: ${submitterName}. Reference: ${submission.reference ?? "N/A"}.`,
           link: `${appUrl}/dashboard/action-center`,
         });
       }
 
       queueEmail({
         to: treater.finca_email!,
+        pattern: "onBusinessUnitTreat",
         subject: `Action Required: "${submission.formName}" is ready for treatment`,
-        html: `
+html: `
           <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
             <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
             <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>

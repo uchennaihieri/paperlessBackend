@@ -113,6 +113,7 @@ router.post("/", async (req: AuthRequest, res: Response) => {
     if (delegateUser.finca_email) {
       await queueEmail({
         to: delegateUser.finca_email,
+        pattern: "onToSign",
         subject: `Delegation Request from ${originalUser.user_name}`,
         html: `
           <h3>Delegation Request</h3>
@@ -175,6 +176,7 @@ router.post("/:id/decline", async (req: AuthRequest, res: Response) => {
     if (delegation.originalUser.finca_email) {
       await queueEmail({
         to: delegation.originalUser.finca_email,
+        pattern: "onDeclined",
         subject: `Delegation Request Declined`,
         html: `
           <h3>Delegation Declined</h3>
