@@ -3,7 +3,7 @@ import prisma from "../lib/prisma";
 import { authenticate, requireAdmin, AuthRequest } from "../middleware/authenticate";
 
 const router = Router();
-router.use(authenticate as any, requireAdmin as any);
+router.use(authenticate as any);
 
 // ── GET /api/v1/lookup?type=role|branch|specialAccess ─────────────────────────
 // Returns all lookup values for a given type, merged with dynamic values
@@ -42,7 +42,7 @@ router.get("/", async (req, res: Response) => {
 
 // ── POST /api/v1/lookup ────────────────────────────────────────────────────────
 // Upsert a custom value into the lookup table for a given type.
-router.post("/", async (req: AuthRequest, res: Response) => {
+router.post("/", requireAdmin as any, async (req: AuthRequest, res: Response) => {
   const { type, value } = req.body as { type: string; value: string };
   if (!type || !value?.trim()) {
     res.status(400).json({ success: false, error: "type and value are required", code: "TYPE_AND_VALUE_ARE_REQUIRED" });

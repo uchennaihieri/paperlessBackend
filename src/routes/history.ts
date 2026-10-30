@@ -38,7 +38,29 @@ router.get("/", async (req: AuthRequest, res: Response) => {
     return;
   }
 
-  const isSystemAdmin = req.user?.user_role?.toLowerCase() === "administrator" || req.user?.specialAccess?.toLowerCase().includes("administrator");
+  const specialAccess = (req.user?.specialAccess ?? "").toLowerCase();
+  let isControl = specialAccess.includes("control");
+  let isSystemAdmin = req.user?.user_role?.toLowerCase() === "administrator" || specialAccess.includes("administrator");
+
+  if (!isControl && !isSystemAdmin && req.user?.id) {
+    const userDb = await prisma.user.findUnique({
+      where: { id: Number(req.user.id) },
+      select: { specialAccess: true, user_role: true }
+    });
+    if (userDb?.specialAccess?.toLowerCase().includes("control")) {
+      isControl = true;
+    }
+    if (userDb?.user_role?.toLowerCase() === "administrator" || userDb?.specialAccess?.toLowerCase().includes("administrator")) {
+      isSystemAdmin = true;
+    }
+  }
+
+  const monitoringParam = req.query.monitoring === "true" || req.query.monitoring === "1";
+  if (monitoringParam && !isControl && !isSystemAdmin) {
+    res.status(403).json({ success: false, error: "Forbidden: Control special access required for monitoring mode", code: "FORBIDDEN_CONTROL_REQUIRED" });
+    return;
+  }
+  const isMonitoring = monitoringParam && (isControl || isSystemAdmin);
 
   // ── Pagination ──────────────────────────────────────────────────────────────
   const page  = Math.max(1, parseInt(req.query.page  as string) || 1);
@@ -50,7 +72,12 @@ router.get("/", async (req: AuthRequest, res: Response) => {
   const rawRoles = ((req.query.role    as string) ?? "").trim();
   const rawStatuses = ((req.query.status as string) ?? "").trim();
   const dateFrom = req.query.dateFrom as string | undefined;
-  const dateTo   = req.query.dateTo   as string | undefined;
+  const dateTo          = req.query.dateTo   as string | undefined;
+  const branch          = ((req.query.branch          as string) ?? "").trim();
+  const submittedBranch = ((req.query.submittedBranch as string) ?? "").trim();
+  const treatedBranch   = ((req.query.treatedBranch   as string) ?? "").trim();
+  const formType        = ((req.query.formType        as string) ?? "").trim();
+  const filterUser      = ((req.query.user            as string) ?? "").trim();
 
   const roles    = rawRoles    ? rawRoles.split(",").map(r => r.trim()).filter(Boolean)    : [];
   const statuses = rawStatuses ? rawStatuses.split(",").map(s => s.trim()).filter(Boolean) : [];
@@ -66,7 +93,7 @@ router.get("/", async (req: AuthRequest, res: Response) => {
   // ── Prisma include shape ─────────────────────────────────────────────────────
   const include = {
     signatories: { orderBy: { position: "asc" as const } },
-    submittedBy: { select: { user_name: true, finca_email: true, branch: true } },
+    submittedBy: { select: { user_name: true, finca_email: true, branch: true, user_role: true } },
     template:    { select: { name: true, formTreater: true } },
   };
 
@@ -108,6 +135,159 @@ router.get("/", async (req: AuthRequest, res: Response) => {
 
   // baseFilter does NOT include textSearch — search is applied at the ID-union level below
   const baseFilter = { ...statusFilter, ...dateCreatedFilter };
+
+  // ── Monitoring Mode (Control / Admin oversight) ──────────────────────────────
+  if (isMonitoring) {
+    const andConditions: any[] = [{ ...baseFilter }];
+
+    if (submittedBranch && submittedBranch.toUpperCase() !== "ALL") {
+      andConditions.push({
+        OR: [
+          { submittedBy: { branch: { equals: submittedBranch, mode: "insensitive" } } },
+          { template: { formOwner: { equals: submittedBranch, mode: "insensitive" } } },
+        ]
+      });
+    }
+
+    if (treatedBranch && treatedBranch.toUpperCase() !== "ALL") {
+      andConditions.push({
+        OR: [
+          { treaterBranch: { equals: treatedBranch, mode: "insensitive" } },
+          { resolvedTreaterBranch: { equals: treatedBranch, mode: "insensitive" } },
+          { template: { formTreater: { equals: treatedBranch, mode: "insensitive" } } },
+        ]
+      });
+    }
+
+    if (!submittedBranch && !treatedBranch && branch && branch.toUpperCase() !== "ALL") {
+      andConditions.push({
+        OR: [
+          { submittedBy: { branch: { equals: branch, mode: "insensitive" } } },
+          { treaterBranch: { equals: branch, mode: "insensitive" } },
+          { resolvedTreaterBranch: { equals: branch, mode: "insensitive" } },
+          { template: { formOwner: { equals: branch, mode: "insensitive" } } },
+          { template: { formTreater: { equals: branch, mode: "insensitive" } } },
+        ]
+      });
+    }
+
+    if (formType && formType.toUpperCase() !== "ALL") {
+      andConditions.push({
+        OR: [
+          { templateId: { equals: formType } },
+          { formName: { equals: formType, mode: "insensitive" } },
+        ]
+      });
+    }
+
+    if (rawRoles && rawRoles.toUpperCase() !== "ALL") {
+      andConditions.push({
+        OR: [
+          { submittedBy: { user_role: { equals: rawRoles, mode: "insensitive" } } },
+          { template: { formTreaterRole: { equals: rawRoles, mode: "insensitive" } } },
+          { resolvedTreaterRole: { equals: rawRoles, mode: "insensitive" } },
+        ]
+      });
+    }
+
+    if (filterUser) {
+      andConditions.push({
+        OR: [
+          { submittedBy: { user_name: { contains: filterUser, mode: "insensitive" } } },
+          { submittedBy: { finca_email: { contains: filterUser, mode: "insensitive" } } },
+          { treatedBy: { contains: filterUser, mode: "insensitive" } },
+          { treaterEmail: { contains: filterUser, mode: "insensitive" } },
+          { approvedBy: { contains: filterUser, mode: "insensitive" } },
+          { approverEmail: { contains: filterUser, mode: "insensitive" } },
+          { publicSubmitterName: { contains: filterUser, mode: "insensitive" } },
+          { publicSubmitterEmail: { contains: filterUser, mode: "insensitive" } },
+          {
+            signatories: {
+              some: {
+                OR: [
+                  { userName: { contains: filterUser, mode: "insensitive" } },
+                  { email: { contains: filterUser, mode: "insensitive" } },
+                ]
+              }
+            }
+          }
+        ]
+      });
+    }
+
+    if (search) {
+      andConditions.push(textSearch);
+    }
+
+    const where = andConditions.length === 1 ? andConditions[0] : { AND: andConditions };
+
+    const [total, rows] = await Promise.all([
+      prisma.formSubmission.count({ where }),
+      prisma.formSubmission.findMany({
+        where,
+        include,
+        orderBy: { updatedAt: "desc" },
+        skip,
+        take: limit,
+      }),
+    ]);
+
+    const data = rows.map((sub: any) => {
+      const myRoles: string[] = [];
+      if (sub.submittedById === userId) myRoles.push("submitted");
+      const sigRow = sub.signatories?.find(
+        (s: any) => s.email.toLowerCase() === email.toLowerCase()
+      );
+      if (sigRow) {
+        myRoles.push(sigRow.status === "Declined" ? "declined" : "signed");
+      }
+      if (sub.treaterEmail && sub.treaterEmail.toLowerCase() === email.toLowerCase()) {
+        myRoles.push("treated");
+      }
+      if (sub.approverEmail && sub.approverEmail.toLowerCase() === email.toLowerCase() && sub.status === "Completed") {
+        myRoles.push("approved");
+      }
+
+      const mySignatory = sigRow
+        ? { status: sigRow.status, signedAt: sigRow.signedAt }
+        : null;
+
+      return {
+        id:           sub.id,
+        formName:     sub.formName,
+        reference:    sub.reference,
+        status:       sub.status,
+        signingType:  sub.signingType,
+        treatedBy:    sub.treatedBy,
+        approvedBy:   sub.approvedBy,
+        createdAt:    sub.createdAt,
+        updatedAt:    sub.updatedAt,
+        myRoles,
+        mySignatory,
+        submittedBy:  sub.submittedBy,
+        template:     sub.template,
+        signatories:  sub.signatories.map((s: any) => ({
+          userName: s.userName,
+          email:    s.email,
+          status:   s.status,
+          signedAt: s.signedAt,
+          position: s.position,
+        })),
+      };
+    });
+
+    res.json({
+      success: true,
+      data,
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    });
+    return;
+  }
 
   // Decide which roles to look up (default: all)
   const includeSubmitted     = roles.length === 0 || roles.includes("submitted");

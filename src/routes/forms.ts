@@ -48,7 +48,8 @@ router.use(authenticate as any);
 router.get("/", async (req: AuthRequest, res: Response) => {
   const userRole = (req.user?.user_role ?? "").toLowerCase();
   const specialAccess = (req.user?.specialAccess ?? "").toLowerCase();
-  const isAdmin = userRole === "administrator" || userRole === "admin" || userRole === "superadmin" || specialAccess.includes("administrator");
+  const isControl = specialAccess.includes("control");
+  const isAdmin = userRole === "administrator" || userRole === "admin" || userRole === "superadmin" || specialAccess.includes("administrator") || isControl;
   const email = req.user?.email?.toLowerCase() ?? "";
 
   let templates;
@@ -196,7 +197,8 @@ router.get("/extended-options", async (req, res: Response) => {
 router.get("/excel-enabled", async (req: AuthRequest, res: Response) => {
   const userRole = (req.user?.user_role ?? "").toLowerCase();
   const specialAccess = (req.user?.specialAccess ?? "").toLowerCase();
-  const isAdmin = userRole === "administrator" || userRole === "admin" || userRole === "superadmin" || specialAccess.includes("administrator");
+  const isControl = specialAccess.includes("control");
+  const isAdmin = userRole === "administrator" || userRole === "admin" || userRole === "superadmin" || specialAccess.includes("administrator") || isControl;
   const email = req.user?.email?.toLowerCase() ?? "";
 
   let templates;
@@ -247,7 +249,8 @@ router.get("/:id", async (req: AuthRequest, res: Response) => {
 
   const userRole = (req.user?.user_role ?? "").toLowerCase();
   const specialAccess = (req.user?.specialAccess ?? "").toLowerCase();
-  const isAdmin = userRole === "administrator" || userRole === "admin" || userRole === "superadmin" || specialAccess.includes("administrator");
+  const isControl = specialAccess.includes("control");
+  const isAdmin = userRole === "administrator" || userRole === "admin" || userRole === "superadmin" || specialAccess.includes("administrator") || isControl;
   const email = req.user?.email?.toLowerCase() ?? "";
 
   if (!isAdmin) {
@@ -402,7 +405,8 @@ router.post("/:id/toggle-public", async (req: AuthRequest, res: Response) => {
 
     const userRole = (req.user?.user_role ?? "").toLowerCase();
     const specialAccess = (req.user?.specialAccess ?? "").toLowerCase();
-    const isAdmin = userRole === "administrator" || userRole === "admin" || userRole === "superadmin" || specialAccess.includes("administrator");
+    const isControl = specialAccess.includes("control");
+  const isAdmin = userRole === "administrator" || userRole === "admin" || userRole === "superadmin" || specialAccess.includes("administrator") || isControl;
     const email = req.user?.email?.toLowerCase() ?? "";
 
     if (!isAdmin) {
