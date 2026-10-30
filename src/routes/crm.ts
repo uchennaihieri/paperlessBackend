@@ -1,7 +1,96 @@
 import { Router } from "express";
 import prisma from "../lib/prisma";
+import { authenticate, AuthRequest } from "../middleware/authenticate";
 
 export const crmRouter = Router();
+
+// GET /api/v1/crm/interactions - Monitoring list of all interaction history
+crmRouter.get("/interactions", authenticate as any, async (req: AuthRequest, res, next) => {
+  try {
+    const specialAccess = (req.user?.specialAccess ?? "").toLowerCase();
+    let isControl = specialAccess.includes("control");
+    let isSystemAdmin = req.user?.user_role?.toLowerCase() === "administrator" || specialAccess.includes("administrator");
+
+    if (!isControl && !isSystemAdmin && req.user?.id) {
+      const userDb = await prisma.user.findUnique({
+        where: { id: Number(req.user.id) },
+        select: { specialAccess: true, user_role: true }
+      });
+      if (userDb?.specialAccess?.toLowerCase().includes("control")) isControl = true;
+      if (userDb?.user_role?.toLowerCase() === "administrator" || userDb?.specialAccess?.toLowerCase().includes("administrator")) isSystemAdmin = true;
+    }
+
+    if (!isControl && !isSystemAdmin) {
+      res.status(403).json({ success: false, error: "Forbidden: Control special access required", code: "FORBIDDEN_CONTROL_REQUIRED" });
+      return;
+    }
+
+    const { date, dateFrom, dateTo, user, phone, status, page = "1", limit = "50" } = req.query as Record<string, string | undefined>;
+
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const take = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
+    const skip = (pageNum - 1) * take;
+
+    const where: any = {};
+
+    if (phone && phone.trim()) {
+      where.customerPhone = { contains: phone.trim() };
+    }
+
+    if (user && user.trim()) {
+      where.OR = [
+        { loggedByName: { contains: user.trim(), mode: "insensitive" } },
+        { loggedByEmail: { contains: user.trim(), mode: "insensitive" } },
+      ];
+    }
+
+    if (status && status.trim() && status.toUpperCase() !== "ALL") {
+      where.status = { equals: status.trim(), mode: "insensitive" };
+    }
+
+    if (date && date.trim()) {
+      const dStart = new Date(`${date.trim()}T00:00:00.000Z`);
+      const dEnd = new Date(`${date.trim()}T23:59:59.999Z`);
+      where.createdAt = { gte: dStart, lte: dEnd };
+    } else {
+      const dateFilter: any = {};
+      if (dateFrom && dateFrom.trim()) {
+        const dFrom = dateFrom.includes("T") ? new Date(dateFrom.trim()) : new Date(`${dateFrom.trim()}T00:00:00.000Z`);
+        if (!isNaN(dFrom.getTime())) dateFilter.gte = dFrom;
+      }
+      if (dateTo && dateTo.trim()) {
+        const dTo = dateTo.includes("T") ? new Date(dateTo.trim()) : new Date(`${dateTo.trim()}T23:59:59.999Z`);
+        if (!isNaN(dTo.getTime())) dateFilter.lte = dTo;
+      }
+      if (Object.keys(dateFilter).length > 0) {
+        where.createdAt = dateFilter;
+      }
+    }
+
+    const [total, interactions] = await Promise.all([
+      prisma.crmInteraction.count({ where }),
+      prisma.crmInteraction.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip,
+        take,
+      }),
+    ]);
+
+    res.json({
+      success: true,
+      data: interactions,
+      meta: {
+        page: pageNum,
+        limit: take,
+        total,
+        totalPages: Math.ceil(total / take),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 
 // GET /api/v1/crm/search
 crmRouter.get("/search", async (req, res, next) => {
