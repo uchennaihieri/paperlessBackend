@@ -53,7 +53,11 @@ router.post("/", async (req: Request, res: Response) => {
 
   if (isRelaxedOtp) {
     console.log(`[OTP] OTP_EMAIL is relaxed — skipping Mobile OTP email for ${email}`);
-    res.json({ success: true, message: "OTP sent successfully" });
+    res.json({
+      success: true,
+      message: "OTP server is unavailable at the moment, but you can contact admin for a dummy login OTP.",
+      otpRelaxed: true,
+    });
     return;
   }
 

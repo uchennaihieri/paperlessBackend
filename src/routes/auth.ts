@@ -126,7 +126,10 @@ router.post("/login", async (req: Request, res: Response) => {
 
   res.json({
     success: true,
-    message: "OTP sent to your registered email.",
+    message: isRelaxedOtp
+      ? "OTP server is unavailable at the moment, but you can contact admin for a dummy login OTP."
+      : "OTP sent to your registered email.",
+    otpRelaxed: isRelaxedOtp,
     email: maskedEmail,
     mustResetPassword: user.mustResetPassword,
   });
@@ -260,7 +263,10 @@ router.post("/forgot-password", async (req: Request, res: Response) => {
 
   res.json({
     success: true,
-    message: "OTP sent to your registered email.",
+    message: isRelaxedOtp
+      ? "OTP server is unavailable at the moment, but you can contact admin for a dummy login OTP."
+      : "OTP sent to your registered email.",
+    otpRelaxed: isRelaxedOtp,
     email: maskedEmail,
   });
 });
