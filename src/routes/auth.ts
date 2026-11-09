@@ -67,53 +67,61 @@ router.post("/login", async (req: Request, res: Response) => {
   const maskedLocal = localPart.charAt(0) + '*'.repeat(localPart.length - 1);
   const maskedEmail = `${maskedLocal}@${domain}`;
 
+  const isRelaxedOtp = process.env.OTP_EMAIL?.trim().toLowerCase() === "relaxed";
+
   // Check if an OTP was recently sent (cooldown)
-  const existingToken = await prisma.verificationToken.findFirst({ where: { email } });
-  if (existingToken) {
-    const createdTime = existingToken.expires.getTime() - 10 * 60 * 1000;
-    const cooldownEnd = createdTime + 4 * 60 * 1000;
-    if (Date.now() < cooldownEnd) {
-      res.status(429).json({
-        success: false,
-        error: "An OTP was recently sent. Please wait before requesting another.",
-        code: "OTP_COOLDOWN",
-        email: maskedEmail,
-        mustResetPassword: user.mustResetPassword
-      });
-      return;
+  if (!isRelaxedOtp) {
+    const existingToken = await prisma.verificationToken.findFirst({ where: { email } });
+    if (existingToken) {
+      const createdTime = existingToken.expires.getTime() - 10 * 60 * 1000;
+      const cooldownEnd = createdTime + 4 * 60 * 1000;
+      if (Date.now() < cooldownEnd) {
+        res.status(429).json({
+          success: false,
+          error: "An OTP was recently sent. Please wait before requesting another.",
+          code: "OTP_COOLDOWN",
+          email: maskedEmail,
+          mustResetPassword: user.mustResetPassword
+        });
+        return;
+      }
     }
   }
 
-  const otp = crypto.randomInt(100000, 999999).toString();
+  const otp = isRelaxedOtp ? "111111" : crypto.randomInt(100000, 999999).toString();
   const expires = new Date();
   expires.setMinutes(expires.getMinutes() + 10);
 
   await prisma.verificationToken.deleteMany({ where: { email } });
   await prisma.verificationToken.create({ data: { email, token: otp, expires } });
 
-  try {
-    await mailer.sendMail({
-      from: `FINCALite <${process.env.SMTP_FROM}>`,
-      to: email,
-      subject: "FINCALite – Your Login OTP",
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
-          <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
-          <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
-          <hr style="border-color: #e5e7eb; margin: 20px 0;" />
-          <p style="font-size: 15px; color: #111827;">Your one-time login code is:</p>
-          <div style="background: #f3f4f6; border-radius: 8px; padding: 20px; text-align: center; margin: 16px 0;">
-            <span style="font-size: 36px; font-weight: bold; letter-spacing: 12px; color: #B50938;">${otp}</span>
+  if (isRelaxedOtp) {
+    console.log(`[OTP] OTP_EMAIL is relaxed — skipping Login OTP email for ${email}`);
+  } else {
+    try {
+      await mailer.sendMail({
+        from: `FINCALite <${process.env.SMTP_FROM}>`,
+        to: email,
+        subject: "FINCALite – Your Login OTP",
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
+            <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
+            <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
+            <hr style="border-color: #e5e7eb; margin: 20px 0;" />
+            <p style="font-size: 15px; color: #111827;">Your one-time login code is:</p>
+            <div style="background: #f3f4f6; border-radius: 8px; padding: 20px; text-align: center; margin: 16px 0;">
+              <span style="font-size: 36px; font-weight: bold; letter-spacing: 12px; color: #B50938;">${otp}</span>
+            </div>
+            <p style="font-size: 13px; color: #6b7280;">This code expires in <strong>10 minutes</strong>. Do not share it with anyone.</p>
           </div>
-          <p style="font-size: 13px; color: #6b7280;">This code expires in <strong>10 minutes</strong>. Do not share it with anyone.</p>
-        </div>
-      `,
-    });
-    console.log(`[OTP] Successfully sent Login OTP email to ${email}`);
-  } catch (err: any) {
-    console.error("OTP mail error:", err);
-    res.status(500).json({ success: false, error: "Failed to send OTP. Please try again.", code: "FAILED_TO_SEND_OTP_PLEASE_TRY" });
-    return;
+        `,
+      });
+      console.log(`[OTP] Successfully sent Login OTP email to ${email}`);
+    } catch (err: any) {
+      console.error("OTP mail error:", err);
+      res.status(500).json({ success: false, error: "Failed to send OTP. Please try again.", code: "FAILED_TO_SEND_OTP_PLEASE_TRY" });
+      return;
+    }
   }
 
   res.json({
@@ -194,52 +202,60 @@ router.post("/forgot-password", async (req: Request, res: Response) => {
   const maskedLocal = localPart.charAt(0) + '*'.repeat(localPart.length - 1);
   const maskedEmail = `${maskedLocal}@${domain}`;
 
+  const isRelaxedOtp = process.env.OTP_EMAIL?.trim().toLowerCase() === "relaxed";
+
   // Check if an OTP was recently sent (cooldown)
-  const existingToken = await prisma.verificationToken.findFirst({ where: { email } });
-  if (existingToken) {
-    const createdTime = existingToken.expires.getTime() - 10 * 60 * 1000;
-    const cooldownEnd = createdTime + 4 * 60 * 1000;
-    if (Date.now() < cooldownEnd) {
-      res.status(429).json({
-        success: false,
-        error: "An OTP was recently sent. Please wait before requesting another.",
-        code: "OTP_COOLDOWN",
-        email: maskedEmail
-      });
-      return;
+  if (!isRelaxedOtp) {
+    const existingToken = await prisma.verificationToken.findFirst({ where: { email } });
+    if (existingToken) {
+      const createdTime = existingToken.expires.getTime() - 10 * 60 * 1000;
+      const cooldownEnd = createdTime + 4 * 60 * 1000;
+      if (Date.now() < cooldownEnd) {
+        res.status(429).json({
+          success: false,
+          error: "An OTP was recently sent. Please wait before requesting another.",
+          code: "OTP_COOLDOWN",
+          email: maskedEmail
+        });
+        return;
+      }
     }
   }
 
-  const otp = crypto.randomInt(100000, 999999).toString();
+  const otp = isRelaxedOtp ? "111111" : crypto.randomInt(100000, 999999).toString();
   const expires = new Date();
   expires.setMinutes(expires.getMinutes() + 10);
 
   await prisma.verificationToken.deleteMany({ where: { email } });
   await prisma.verificationToken.create({ data: { email, token: otp, expires } });
 
-  try {
-    await mailer.sendMail({
-      from: `FINCALite <${process.env.SMTP_FROM}>`,
-      to: email,
-      subject: "FINCALite – Your Password Reset OTP",
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
-          <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
-          <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
-          <hr style="border-color: #e5e7eb; margin: 20px 0;" />
-          <p style="font-size: 15px; color: #111827;">Your one-time code to reset your password is:</p>
-          <div style="background: #f3f4f6; border-radius: 8px; padding: 20px; text-align: center; margin: 16px 0;">
-            <span style="font-size: 36px; font-weight: bold; letter-spacing: 12px; color: #B50938;">${otp}</span>
+  if (isRelaxedOtp) {
+    console.log(`[OTP] OTP_EMAIL is relaxed — skipping Password Reset OTP email for ${email}`);
+  } else {
+    try {
+      await mailer.sendMail({
+        from: `FINCALite <${process.env.SMTP_FROM}>`,
+        to: email,
+        subject: "FINCALite – Your Password Reset OTP",
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
+            <h2 style="color: #B50938; margin-bottom: 4px;">FINCALite</h2>
+            <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Operations Platform</p>
+            <hr style="border-color: #e5e7eb; margin: 20px 0;" />
+            <p style="font-size: 15px; color: #111827;">Your one-time code to reset your password is:</p>
+            <div style="background: #f3f4f6; border-radius: 8px; padding: 20px; text-align: center; margin: 16px 0;">
+              <span style="font-size: 36px; font-weight: bold; letter-spacing: 12px; color: #B50938;">${otp}</span>
+            </div>
+            <p style="font-size: 13px; color: #6b7280;">This code expires in <strong>10 minutes</strong>. Do not share it with anyone.</p>
           </div>
-          <p style="font-size: 13px; color: #6b7280;">This code expires in <strong>10 minutes</strong>. Do not share it with anyone.</p>
-        </div>
-      `,
-    });
-    console.log(`[OTP] Successfully sent Password Reset OTP email to ${email}`);
-  } catch (err: any) {
-    console.error("OTP mail error:", err);
-    res.status(500).json({ success: false, error: "Failed to send OTP. Please try again.", code: "FAILED_TO_SEND_OTP_PLEASE_TRY" });
-    return;
+        `,
+      });
+      console.log(`[OTP] Successfully sent Password Reset OTP email to ${email}`);
+    } catch (err: any) {
+      console.error("OTP mail error:", err);
+      res.status(500).json({ success: false, error: "Failed to send OTP. Please try again.", code: "FAILED_TO_SEND_OTP_PLEASE_TRY" });
+      return;
+    }
   }
 
   res.json({

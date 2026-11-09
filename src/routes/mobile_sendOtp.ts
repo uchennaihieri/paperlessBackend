@@ -25,27 +25,37 @@ router.post("/", async (req: Request, res: Response) => {
     return;
   }
 
+  const isRelaxedOtp = process.env.OTP_EMAIL?.trim().toLowerCase() === "relaxed";
+
   // Check if an OTP was recently sent (cooldown)
-  const existingToken = await prisma.verificationToken.findFirst({ where: { email } });
-  if (existingToken) {
-    const createdTime = existingToken.expires.getTime() - 10 * 60 * 1000;
-    const cooldownEnd = createdTime + 4 * 60 * 1000;
-    if (Date.now() < cooldownEnd) {
-      res.status(429).json({
-        success: false,
-        error: "An OTP was recently sent. Please wait before requesting another.",
-        code: "OTP_COOLDOWN"
-      });
-      return;
+  if (!isRelaxedOtp) {
+    const existingToken = await prisma.verificationToken.findFirst({ where: { email } });
+    if (existingToken) {
+      const createdTime = existingToken.expires.getTime() - 10 * 60 * 1000;
+      const cooldownEnd = createdTime + 4 * 60 * 1000;
+      if (Date.now() < cooldownEnd) {
+        res.status(429).json({
+          success: false,
+          error: "An OTP was recently sent. Please wait before requesting another.",
+          code: "OTP_COOLDOWN"
+        });
+        return;
+      }
     }
   }
 
-  const otp = crypto.randomInt(100000, 999999).toString();
+  const otp = isRelaxedOtp ? "111111" : crypto.randomInt(100000, 999999).toString();
   const expires = new Date();
   expires.setMinutes(expires.getMinutes() + 10);
 
   await prisma.verificationToken.deleteMany({ where: { email } });
   await prisma.verificationToken.create({ data: { email, token: otp, expires } });
+
+  if (isRelaxedOtp) {
+    console.log(`[OTP] OTP_EMAIL is relaxed — skipping Mobile OTP email for ${email}`);
+    res.json({ success: true, message: "OTP sent successfully" });
+    return;
+  }
 
   try {
     await mailer.sendMail({
